@@ -1,0 +1,7 @@
+numpy
+matplotlib
+opencv-python
+ipython
+scipy
+meshio
+gmsh
