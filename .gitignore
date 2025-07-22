@@ -1,1 +1,3 @@
-ambiente_chloride
+ambiente_chloride/
+env/
+*.pyc
