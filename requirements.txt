@@ -6,3 +6,5 @@ scipy
 meshio
 gmsh
 ipykernel
+torch
+torchvision
