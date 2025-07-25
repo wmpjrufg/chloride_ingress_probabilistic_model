@@ -8,3 +8,4 @@ gmsh
 ipykernel
 torch
 torchvision
+shapely
