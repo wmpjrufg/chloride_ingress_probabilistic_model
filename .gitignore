@@ -1,3 +1,4 @@
 ambiente_chloride/
 env/
 *.pyc
+*.pt
