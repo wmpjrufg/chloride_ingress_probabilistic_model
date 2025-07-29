@@ -8,3 +8,5 @@ gmsh
 ipykernel
 torch
 torchvision
+pandas
+openpyxl
