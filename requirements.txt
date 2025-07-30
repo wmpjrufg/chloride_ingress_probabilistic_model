@@ -10,3 +10,4 @@ torch
 torchvision
 pandas
 openpyxl
+seaborn
