@@ -2,8 +2,9 @@ import json
 import os
 import random
 import cv2
-import shapely as sh
+import shutil
 
+import shapely as sh
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -317,7 +318,7 @@ def crop_contours(json_file: str, output_dir: str, canvas_size: int = 512) -> No
             output_name = f"{os.path.splitext(image_name)[0]}_{idx}.png"
             cv2.imwrite(os.path.join(output_dir, output_name), cropped)
 
-    print(f"Contornos centralizados e salvos em '{output_dir}'")
+    print(f"Contours cropped and saved to {output_dir}.")
 
 
 def flatten_contours_json(original_json_path: str, output_json_path: str) -> None:
@@ -344,7 +345,7 @@ def flatten_contours_json(original_json_path: str, output_json_path: str) -> Non
     with open(output_json_path, 'w') as f:
         json.dump(flat_data, f, indent=4)
 
-    print(f"Novo JSON salvo em '{output_json_path}' com {len(flat_data)} contornos.")
+    print(f"New flattened JSON saved to {output_json_path} with {len(flat_data)} contours.")
 
 
 def generate_dataset_csv_from_real_mask(
@@ -373,16 +374,16 @@ def generate_dataset_csv_from_real_mask(
         image_path = os.path.join(image_dir, image_name)
 
         if not os.path.exists(image_path):
-            print(f"Imagem não encontrada: {image_path}")
+            print(f"Image not found: {image_path}")
             continue
 
-        # Lê imagem binária em escala de cinza
+        # Read binary image in grayscale
         img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         _, thresh = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY)
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            print(f"Nenhum contorno encontrado em {image_name}")
+            print(f"No contour found in {image_name}")
             continue
 
         largest_contour = max(contours, key=cv2.contourArea)
@@ -402,12 +403,8 @@ def generate_dataset_csv_from_real_mask(
 
     df = pd.DataFrame(records)
     df.to_csv(output_csv_path, index=False)
-    print(f"CSV salvo em: {output_csv_path} com {len(df)} amostras.")
+    print(f"CSV saved to: {output_csv_path} with {len(df)} samples.")
 
-
-import os
-import shutil
-import pandas as pd
 
 def filter_images_by_diameter(
     csv_path: str,
@@ -426,8 +423,8 @@ def filter_images_by_diameter(
     """
     df = pd.read_csv(csv_path)
 
-    if 'image' not in df.columns or 'd' not in df.columns:
-        raise ValueError("O CSV deve conter as colunas 'image' e 'd'.")
+    if 'image_name' not in df.columns or 'qd' not in df.columns:
+        raise ValueError("The CSV must contain 'image_name' and 'qd' columns.")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -435,8 +432,8 @@ def filter_images_by_diameter(
     count_removed = 0
 
     for _, row in df.iterrows():
-        image_name = row['image']
-        d_mm = row['d']
+        image_name = row['image_name']
+        d_mm = row['qd']
 
         if pd.isna(d_mm):
             continue
@@ -449,10 +446,10 @@ def filter_images_by_diameter(
                 shutil.copy(src_path, dst_path)
                 count_copied += 1
             else:
-                print(f"Imagem não encontrada: {src_path}")
+                print(f"Image not found: {src_path}")
         else:
             count_removed += 1
 
-    print(f"\nImagens com diâmetro < {threshold_diam_mm} mm copiadas para: {output_dir}")
-    print(f"Total de imagens copiadas: {count_copied}")
-    print(f"Total de imagens removidas (>= {threshold_diam_mm} mm): {count_removed}")
+    print(f"\nImages with diameter < {threshold_diam_mm} mm copied to: {output_dir}")
+    print(f"Total images copied: {count_copied}")
+    print(f"Total images removed (>= {threshold_diam_mm} mm): {count_removed}")
