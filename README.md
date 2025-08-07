@@ -8,3 +8,9 @@ Ketson Roberto
 Mahmoud
 Luiz Henrique
 João Gabriel
+
+# Active env
+env\Scripts\activate
+
+# Install requirements
+pip install -r requirements.txt
