@@ -165,26 +165,25 @@ def process_images_to_json(filepath: str, output_json: str, output_patch: str, w
         contours_json[image_key] = {}
 
         # Calculate the maximum size of the contours
-        l_xmax = []
-        l_ymax = []
-        for idx, contour in myc.items():
-            coords = contour[:, 0, :]
-            x_coords = coords[:, 0].tolist()
-            y_coords = coords[:, 1].tolist()
-            res = size_polygon(x_coords, y_coords)
-            l_xmax.append(res[0])
-            l_ymax.append(res[1])
-        l_xback = max(l_xmax)
-        l_yback = max(l_ymax)
-        l_max = max([l_xback, l_yback])
+        # l_xmax = []
+        # l_ymax = []
+        # for idx, contour in myc.items():
+        #     coords = contour[:, 0, :]
+        #     x_coords = coords[:, 0].tolist()
+        #     y_coords = coords[:, 1].tolist()
+        #     res = size_polygon(x_coords, y_coords)
+        #     l_xmax.append(res[0])
+        #     l_ymax.append(res[1])
+        # l_xback = max(l_xmax)
+        # l_yback = max(l_ymax)
+        # l_max = max([l_xback, l_yback])
         
         # Save contours and their areas in the JSON format
         for idx, contour in myc.items():
             coords = contour[:, 0, :]
             x_coords = coords[:, 0].tolist()
             y_coords = coords[:, 1].tolist()
-            xg, yg, _ = centroid_polygon(x_coords, y_coords)
-            # x_coords_trans, y_coords_trans = transport_polygon(x_coords, y_coords, l_max/2, l_max/2)
+            x_g, y_g = transport_polygon(x_coords, y_coords, 0 , 0)
             area = cv2.contourArea(contour)
             q_ga = area
             q_pic = float(area / image_area)
@@ -195,11 +194,11 @@ def process_images_to_json(filepath: str, output_json: str, output_patch: str, w
                 'area (px)': q_ga,
                 'q_pic': q_pic,
                 'q_pat': q_pat,
-                'lmax': l_max,
-                'xg': xg,
-                'yg': yg
+                # 'lmax': l_max,
+                'xg': x_g,
+                'yg': y_g
             }
-    
+        
     # Write the contours to a JSON file
     new_output_json = output_json
     output_json += '_by_image.json'
@@ -216,11 +215,11 @@ def process_images_to_json(filepath: str, output_json: str, output_patch: str, w
         for idx, contour in contours.items():
             key = f"{base_name}_{idx}.png"
             flat_data[key] = {
-                'x': contour.get("x", []),
-                'y': contour.get("y", []),
-                'q_pic': contour.get('q_pic', None),
-                'q_pat': contour.get('q_pat', None),
-                'area (px)': contour.get('area (px)', None)
+                'x': contour['x'],
+                'y': contour['y'],
+                'q_pic': contour['q_pic'],
+                'q_pat': contour['q_pat'],
+                'area (px)': contour['area (px)']
             }
 
     # Write in csv file using diameter an area information
@@ -288,9 +287,6 @@ def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'd
         _, thresh = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY)
 
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            print(f"No contour found in {image_name}")
-            continue
 
         largest_contour = max(contours, key=cv2.contourArea)
         (_, _), radius = cv2.minEnclosingCircle(largest_contour)
@@ -299,8 +295,8 @@ def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'd
 
         records.append({
             'image_name': image_name,
-            'area (px)': values.get('area (px)'),
-            'area (mm2)': (75*75) * values.get('area (mm)') / (2500*2500),
+            'area (px)': values['area (px)'],
+            'area (mm2)': (75*75) * values['area (px)'] / (2500*2500),
             'diameter (px)': diam_px,
             'diameter (mm)': diam_mm
         })
