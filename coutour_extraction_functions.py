@@ -3,6 +3,7 @@ import os
 import random
 import cv2
 import shutil
+from typing import Sequence
 
 import shapely as sh
 import numpy as np
@@ -10,79 +11,27 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-def centroid_polygon(x: list, y: list) -> tuple[float, float, list]:
+def transform_contours_dict(contours: Sequence) -> dict: 
     """
-    Calculate the centroid of a polygon defined by its vertices.
+    Extract contours from a list of contours and return them as a dictionary.
 
-    :param x: x-coordinates of the polygon vertices
-    :param y: y-coordinates of the polygon vertices
+    :param contours: Opencv contours to be processed
 
-    :return: output[0] = x centroid, output[1] = y centroid and output[2] = coordinates of the polygon in tuple format
-    """
-
-    coords = []
-    for i, j in zip(x, y):
-        coords.append((i, j))
-    polyg = sh.geometry.Polygon(coords)
-    centre = polyg.centroid
-
-    return centre.x, centre.y, coords
-
-
-def transport_polygon(x: list, y: list, x_new: float, y_new: float) -> tuple[float, float]:
-    """
-    Translate a polygon defined by its vertices to a new position.
-
-    :param x: x-coordinates of the polygon vertices
-    :param y: y-coordinates of the polygon vertices
-    :param x_new: new x-coordinate for the centroid of the polygon
-    :param y_new: new y-coordinate for the centroid of the polygon
-
-    :return: output[0] = new x-coordinates of the polygon vertices and output[1] = new y-coordinates of the polygon vertices
+    :return: Contour points. Each index of the dictionary corresponds to a contour
     """
 
-    x_g, y_g, coords = centroid_polygon(x, y)
-    dx = -x_g
-    dy = -y_g
+    myconts = {}
+    for i, contour in enumerate(contours):
+        myconts[str(i)] = np.array(contour)
 
-    # Translate the polygon to the origin
-    transl_polygon_00 = sh.affinity.translate(sh.geometry.Polygon(coords), xoff=dx, yoff=dy)
-
-    # Translate the polygon to the new position
-    transl_polygon_xy = sh.affinity.translate(transl_polygon_00, xoff=x_new, yoff=y_new)
-
-    # Extract the new x and y coordinates
-    x_trans = [po[0] for po in transl_polygon_xy.exterior.coords]
-    y_trans = [po[1] for po in transl_polygon_xy.exterior.coords]
-
-    return x_trans, y_trans
+    return myconts
 
 
-def size_polygon(x: list, y: list) -> tuple[float, float]:
-    """
-    Calculate the size of a polygon defined by its vertices.
-
-    :param x: x-coordinates of the polygon vertices
-    :param y: y-coordinates of the polygon vertices
-
-    :return: output[0] = length in x direction and output[1] = length in y direction
-    """
-
-    x_min = min(x)
-    x_max = max(x)
-    y_min = min(y)
-    y_max = max(y)
-    l_x = x_max - x_min
-    l_y = y_max - y_min
-
-    return l_x, l_y
-
-
-def exclude_cont_bound(myconts: dict, n_x: float, n_y: float) -> dict:
+def exclude_contours_in_boundary(myconts: dict, n_x: float, n_y: float) -> dict:
     """
     Exclude contours that touch the boundary of the image.
     
-    :param myconts: Dictionary of contours
+    :param myconts: Contour points. Each index of the dictionary corresponds to a contour
     :param n_x: Width of the image or criterion for exclusion
     :param n_y: Height of the image or criterion for exclusion
 
@@ -105,129 +54,72 @@ def exclude_cont_bound(myconts: dict, n_x: float, n_y: float) -> dict:
     return myconts_copy
 
 
-def extract_contours(contours: dict) -> dict: 
+def size_polygon(x: list, y: list) -> tuple[float, float]:
     """
-    Extract contours from a list of contours and return them as a dictionary.
-    
-    :param contours: Contours to be processed
-    
-    :return: Contour points. Each index of the dictionary corresponds to a contour.
-    """
+    Calculate the size of a polygon defined by its vertices.
 
-    myconts = {}
-    for i, contour in enumerate(contours):
-        myconts[str(i)] = np.array(contour)
-        
-    return myconts
+    :param x: x-coordinates of the polygon vertices
+    :param y: y-coordinates of the polygon vertices
 
-
-def process_images_to_json(filepath: str, output_json: str, output_patch: str, width: int=2500, height: int=2500) -> tuple[int, int]:
-    """
-    Process images to extract contours and save them in a JSON file.
-
-    :param filepath: Path to the image or directory containing images
-    :param output_json: Name to the output JSON file without extension
-    :param output_patch: Directory to save the cropped images
-    :param width: Width of the images (default is 2500 px)
-    :param height: Height of the images (default is 2500 px)
-
-    :return: output[0] = Number of images processed, output[1] = Number of contours extracted and saved in the JSON file
+    :return: [0] = length in x direction, [1] = length in y direction
     """
 
-    contours_json = {}
-    image_area = width * height 
-    if os.path.isdir(filepath):
-        files = [os.path.join(filepath, f) for f in os.listdir(filepath) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-        files_path = [os.path.join(filepath, f) for f in os.listdir(filepath) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    elif isinstance(filepath, (list, tuple)):
-        files = filepath 
-    else:
-        files = [filepath] 
+    x_min = min(x)
+    x_max = max(x)
+    y_min = min(y)
+    y_max = max(y)
+    l_x = x_max - x_min
+    l_y = y_max - y_min
 
-    # Read each image and process contours
-    for filename in files:
-        img = cv2.imread(filename)
-        if img is None:
-            print(f"Error to read image: {filename}")
-            continue        
+    return l_x, l_y
 
-        # Get contour
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, threshold = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        myconts = extract_contours(contours)
 
-        # Exclude contours that touch the boundary
-        myc = exclude_cont_bound(myconts, width-1, height-1)
+def centroid_polygon(x: list, y: list) -> tuple[float, float, list]:
+    """
+    Calculate the centroid of a polygon defined by its vertices.
 
-        # Create a dictionary to save contours in JSON format
-        image_key = os.path.basename(filename)
-        contours_json[image_key] = {}
+    :param x: x-coordinates of the polygon vertices
+    :param y: y-coordinates of the polygon vertices
 
-        # Calculate the maximum size of the contours
-        # l_xmax = []
-        # l_ymax = []
-        # for idx, contour in myc.items():
-        #     coords = contour[:, 0, :]
-        #     x_coords = coords[:, 0].tolist()
-        #     y_coords = coords[:, 1].tolist()
-        #     res = size_polygon(x_coords, y_coords)
-        #     l_xmax.append(res[0])
-        #     l_ymax.append(res[1])
-        # l_xback = max(l_xmax)
-        # l_yback = max(l_ymax)
-        # l_max = max([l_xback, l_yback])
-        
-        # Save contours and their areas in the JSON format
-        for idx, contour in myc.items():
-            coords = contour[:, 0, :]
-            x_coords = coords[:, 0].tolist()
-            y_coords = coords[:, 1].tolist()
-            x_g, y_g = transport_polygon(x_coords, y_coords, 0 , 0)
-            area = cv2.contourArea(contour)
-            q_ga = area
-            q_pic = float(area / image_area)
-            q_pat = float(area / (512*512))
-            contours_json[image_key][f"{idx}"] = {
-                'x': x_coords,
-                'y': y_coords,
-                'area (px)': q_ga,
-                'q_pic': q_pic,
-                'q_pat': q_pat,
-                # 'lmax': l_max,
-                'xg': x_g,
-                'yg': y_g
-            }
-        
-    # Write the contours to a JSON file
-    new_output_json = output_json
-    output_json += '_by_image.json'
-    with open(output_json, 'w') as f:
-        json.dump(contours_json, f, indent=4)
-        print(f"Contours by file extracted and saved to {output_json}")
-    crop_contours(output_json, output_patch+'/binary_patchs')
-    new_output_json += '_by_patch.json'
-    with open(output_json, 'r') as f:
-        data = json.load(f)
-    flat_data = {}
-    for image_name, contours in data.items():
-        base_name = os.path.splitext(image_name)[0]
-        for idx, contour in contours.items():
-            key = f"{base_name}_{idx}.png"
-            flat_data[key] = {
-                'x': contour['x'],
-                'y': contour['y'],
-                'q_pic': contour['q_pic'],
-                'q_pat': contour['q_pat'],
-                'area (px)': contour['area (px)']
-            }
+    :return: [0] = x centroid, [1] = y centroid, [2] = coordinates of the polygon in tuple format
+    """
 
-    # Write in csv file using diameter an area information
-    with open(new_output_json, 'w') as f:
-        json.dump(flat_data, f, indent=4)
-    generate_dataset_csv_from_real_mask(new_output_json)
+    coords = []
+    for i, j in zip(x, y):
+        coords.append((i, j))
+    polyg = sh.geometry.Polygon(coords)
+    centre = polyg.centroid
 
-    return len(files_path), len(flat_data)
+    return centre.x, centre.y, coords
+
+
+def transport_polygon(x: list, y: list, x_new: float, y_new: float) -> tuple[list, list]:
+    """
+    Translate a polygon defined by its vertices to a new position.
+
+    :param x: x-coordinates of the polygon vertices
+    :param y: y-coordinates of the polygon vertices
+    :param x_new: new x-coordinate for the centroid of the polygon
+    :param y_new: new y-coordinate for the centroid of the polygon
+
+    :return: [0] = new x-coordinates of the polygon vertices, [1] = new y-coordinates of the polygon vertices
+    """
+
+    x_g, y_g, coords = centroid_polygon(x, y)
+    dx = -x_g
+    dy = -y_g
+
+    # Translate the polygon to the origin
+    transl_polygon_00 = sh.affinity.translate(sh.geometry.Polygon(coords), xoff=dx, yoff=dy)
+
+    # Translate the polygon to the new position
+    transl_polygon_xy = sh.affinity.translate(transl_polygon_00, xoff=x_new, yoff=y_new)
+
+    # Extract the new x and y coordinates
+    x_trans = [po[0] for po in transl_polygon_xy.exterior.coords]
+    y_trans = [po[1] for po in transl_polygon_xy.exterior.coords]
+
+    return x_trans, y_trans
 
 
 def crop_contours(json_file: str, output_dir: str, canvas_size: int = 512) -> None:
@@ -245,8 +137,8 @@ def crop_contours(json_file: str, output_dir: str, canvas_size: int = 512) -> No
 
     for image_name, contours in contours_data.items():
         for idx, contour in contours.items():
-            x_coords = contour["x"]
-            y_coords = contour["y"]
+            x_coords = contour["x coordinate in 0,0"]
+            y_coords = contour["y coordinate in 0,0"]
             x_new, y_new = canvas_size // 2, canvas_size // 2
             x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
             blank = np.zeros((canvas_size, canvas_size), dtype=np.uint8)
@@ -259,7 +151,7 @@ def crop_contours(json_file: str, output_dir: str, canvas_size: int = 512) -> No
     print(f"Contours cropped and saved to {output_dir}.")
 
 
-def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'dataset/binary_patchs', output_csv_path: str = 'contours_dataset.csv', px_to_mm: float = 3.0 / 100.0) -> None:
+def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'dataset/binary_patchs', output_csv_path: str = 'dataset_contours_aggregate_by_patch.csv', px_to_mm: float = 3.0 / 100.0) -> None:
     """
     Generate a CSV file with columns: image_name, qd (relative area), d (real diameter in mm)
 
@@ -286,8 +178,10 @@ def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'd
         img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         _, thresh = cv2.threshold(img, 10, 255, cv2.THRESH_BINARY)
 
+        # Find contours
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        # Diameter
         largest_contour = max(contours, key=cv2.contourArea)
         (_, _), radius = cv2.minEnclosingCircle(largest_contour)
         diam_px = 2 * radius
@@ -295,17 +189,131 @@ def generate_dataset_csv_from_real_mask(flat_json_path: str, image_dir: str = 'd
 
         records.append({
             'image_name': image_name,
-            'area (px)': values['area (px)'],
-            'area (mm2)': (75*75) * values['area (px)'] / (2500*2500),
+            'area (px)': values['contour area (px)'],
+            'area (mm2)': (75*75) * values['contour area (px)'] / (2500*2500),
             'diameter (px)': diam_px,
             'diameter (mm)': diam_mm
         })
 
     df = pd.DataFrame(records)
     df.to_csv(output_csv_path, index=False)
-    print(f"CSV saved to: {output_csv_path} with {len(df)} samples.")
+    print(f"Contours by file extracted and saved to: {output_csv_path} with {len(df)} samples.")
 
 
+def process_images_to_json(filepath: str, output_json: str, output_patch: str, width: int=2500, height: int=2500) -> tuple[int, int]:
+    """
+    Process images to extract contours and save them in a JSON file. This function save one json file per image, one json file per contour.
+
+    :param filepath: Path to the images or path image
+    :param output_json: Name to the output JSON file without extension
+    :param output_patch: Directory to save the cropped images
+    :param width: Width of the images (default is 2500 px)
+    :param height: Height of the images (default is 2500 px)
+
+    :return: [0] = Number of images processed, output[1] = Number of contours extracted and saved in the JSON file
+    """
+
+    # Variables
+    image_area = width * height 
+    image_patch = 512 * 512
+    boundary_condition_w = width - 2
+    boundary_condition_h = height - 2
+
+    # Get images
+    contours_json = {}
+    if os.path.isdir(filepath):
+        files = [os.path.join(filepath, f) for f in os.listdir(filepath) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files_path = [os.path.join(filepath, f) for f in os.listdir(filepath) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    elif isinstance(filepath, (list, tuple)):
+        files = filepath 
+    else:
+        files = [filepath] 
+
+    # Read each image and process contours
+    for filename in files:
+        img = cv2.imread(filename)
+        if img is None:
+            print(f"Error to read image: {filename}")
+            continue        
+
+        # Get contour
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, threshold = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        myconts = transform_contours_dict(contours)
+
+        # Exclude contours that touch the boundary
+        myc_filtered = exclude_contours_in_boundary(myconts, boundary_condition_w, boundary_condition_h)
+
+        # Create a dictionary to save contours in JSON format
+        image_key = os.path.basename(filename)
+        contours_json[image_key] = {}
+
+        # Calculate the maximum size of the contours
+        l_xmax = []
+        l_ymax = []
+        for idx, contour in myc_filtered.items():
+            coords = contour[:, 0, :]
+            x_coords = coords[:, 0].tolist()
+            y_coords = coords[:, 1].tolist()
+            res = size_polygon(x_coords, y_coords)
+            l_xmax.append(res[0])
+            l_ymax.append(res[1])
+        l_xback = max(l_xmax)
+        l_yback = max(l_ymax)
+        l_max = max([l_xback, l_yback])
+        
+        # Save contours and their areas in the JSON format
+        for idx, contour in myc_filtered.items():
+            coords = contour[:, 0, :]
+            x_coords = coords[:, 0].tolist()
+            y_coords = coords[:, 1].tolist()
+            x_00, y_00 = transport_polygon(x_coords, y_coords, 0 , 0)
+            area = cv2.contourArea(contour)
+            q_ga = area
+            q_pic = float(area / image_area)
+            q_pat = float(area / image_patch)
+            contours_json[image_key][f"{idx}"] = {
+                'x coordinate in original image': x_coords,
+                'y coordinate in original image': y_coords,
+                'contour area (px)': q_ga,
+                'rate of contour area to image area': q_pic,
+                'rate of contour area to patch area': q_pat,
+                'major width extract to contours': l_max,
+                'x coordinate in 0,0': x_00,
+                'y coordinate in 0,0': y_00
+            }
+        
+    # Write the contours to a JSON file
+    new_output_json = output_json
+    output_json += '_by_image.json'
+    with open(output_json, 'w') as f:
+        json.dump(contours_json, f, indent=4)
+        print(f"Contours by file extracted and saved to {output_json}")
+    crop_contours(output_json, output_patch+'/binary_patchs')
+    new_output_json += '_by_patch.json'
+    with open(output_json, 'r') as f:
+        data = json.load(f)
+    flat_data = {}
+    for image_name, contours in data.items():
+        base_name = os.path.splitext(image_name)[0]
+        for idx, contour in contours.items():
+            key = f"{base_name}_{idx}.png"
+            flat_data[key] = {
+                'x coordinate in 0,0': contour['x coordinate in 0,0'],
+                'y coordinate in 0,0': contour['y coordinate in 0,0'],
+                'rate of contour area to image area': contour['rate of contour area to image area'],
+                'rate of contour area to patch area': contour['rate of contour area to patch area'],
+                'contour area (px)': contour['contour area (px)']
+            }
+    with open(new_output_json, 'w') as f:
+        json.dump(flat_data, f, indent=4)
+        print(f"Contours by file extracted and saved to {new_output_json}")
+
+    # Write in csv file using diameter an area information
+    generate_dataset_csv_from_real_mask(new_output_json)
+
+    return len(files_path), len(flat_data)
 
 
 def plot_contours_from_json(json_file: str, keys_to_plot: list = None, width: int = 2500, height: int = 2500) -> None:
@@ -391,8 +399,6 @@ def plot_contours_from_json(json_file: str, keys_to_plot: list = None, width: in
 
         plt.tight_layout()
         plt.show()
-
-
 
 
 def filter_images_by_diameter(
