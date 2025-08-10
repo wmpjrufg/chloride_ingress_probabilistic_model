@@ -424,3 +424,18 @@ def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_pat
     print(f"Total images copied: {n_filtered_img}")
     print(f"Total images removed (>= {threshold_diam_mm} mm): {n_total_img - n_filtered_img}")
     df_filtered.to_csv("dataset_contours_aggregate_by_patch_filtered.csv", index=False)
+
+
+def obtain_cdf(x: list) -> tuple[list, list]:
+    """
+    Obtain the cumulative distribution function (CDF) of a list of values.
+
+    :param x: values
+
+    :return: [0] = sorted values, [1] = CDF of the input values
+    """
+
+    x_sorted = np.sort(x)
+    x_cdf = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
+
+    return list(x_sorted), list(x_cdf)
