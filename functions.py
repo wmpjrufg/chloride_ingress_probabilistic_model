@@ -1,14 +1,18 @@
+"""Functions to resolve paper: ..."""
 import json
 import os
 import random
 import cv2
 import shutil
 from typing import Sequence
+import zipfile
 
 import shapely as sh
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import gdown
+import scipy
 
 
 def transform_contours_dict(contours: Sequence) -> dict: 
@@ -426,6 +430,89 @@ def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_pat
     df_filtered.to_csv("dataset_contours_aggregate_by_patch_filtered.csv", index=False)
 
 
+def generate_canvas_from_json(json_path, canvas_size, n_objects):
+    """
+    Generate a canvas image from contour data in a JSON file.
+
+    :param json_path: Path to the JSON file containing contour data
+    :param canvas_size: Size of the canvas (height, width)
+    :param n_objects: Number of objects to include in the canvas
+    """
+    
+    # Open json file and created 1,1,1,1 matrix
+    with open(json_path, 'r') as f:
+        contour_data = json.load(f)
+
+    # Sorted keys using diameter column: decrease way
+    all_keys = list(contour_data.keys())
+    sampled_elements = list(np.random.choice(all_keys, size=n_objects, replace=False))
+    sampled_elements.sort(key=lambda k: contour_data[k]["contour area (px)"], reverse=True)
+
+    # Latim Hypercube Centroids
+    sampler = scipy.stats.qmc.LatinHypercube(d=2)
+    sample = sampler.random(n=n_objects)
+    scaled_sample = scipy.stats.qmc.scale(sample, l_bounds=[0, 0], u_bounds=[canvas_size[0], canvas_size[1]])
+
+    # Separando coordenadas x (largura) e y (altura)
+    x_centroids = scaled_sample[:, 0]
+    y_centroids = scaled_sample[:, 1]
+   
+    contours_info = []
+    # matriz_binaria = np.zeros(canvas_size, dtype=np.uint8)
+    # for id, value in enumerate(sampled_elements):
+    #     x_coords = contour_data[value]["x coordinate in 0,0"]
+    #     y_coords = contour_data[value]["y coordinate in 0,0"]
+    #     x_new, y_new = x_centroids[id], y_centroids[id]
+    #     x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
+    #     blank = np.zeros((canvas_size[0], canvas_size[1]), dtype=np.uint8)
+    #     pts = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
+    #     cv2.drawContours(blank, [pts], -1, color=255, thickness=cv2.FILLED)
+    #     cropped = blank
+    #     matriz_binaria += cropped
+    #     # matriz_binaria = (cropped == 255).astype(int)
+    # np.savetxt("matriz_retangulo.txt", matriz_binaria, fmt='%d')
+    # plt.imshow(matriz_binaria)# , cmap="gray")  # 'gray' para manter tons de cinza
+    # plt.axis("off")                   # remove eixos
+    # plt.show()
+
+    matriz_contagem = np.zeros(canvas_size, dtype=np.uint16)
+    for id, value in enumerate(sampled_elements):
+        x_coords = contour_data[value]["x coordinate in 0,0"]
+        y_coords = contour_data[value]["y coordinate in 0,0"]
+        x_new, y_new = x_centroids[id], y_centroids[id]
+        x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
+
+        blank = np.zeros(canvas_size, dtype=np.uint8)
+        pts = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
+        cv2.drawContours(blank, [pts], -1, color=255, thickness=cv2.FILLED)
+
+        # máscara 0/1 e acumula em uint16
+        mask = (blank == 255).astype(np.uint16)
+        matriz_contagem += mask
+
+    # Pixels com sobreposição (≥2 contornos)
+    overlap_mask = (matriz_contagem >= 2)
+    print("estou aqui: ", np.sum(overlap_mask), overlap_mask.shape)
+
+    # Se quiser visualizar a contagem (sem estourar):
+    plt.imshow(matriz_contagem, cmap="gray")
+    plt.axis("off")
+    plt.show()
+
+    # # Se quiser salvar como texto (contagens inteiras):
+    # np.savetxt("matriz_contagem.txt", matriz_contagem, fmt='%d')
+
+    # for key, contour in contours_info:
+    #     x, y, w, h = cv2.boundingRect(contour)
+    #     max_x = canvas.shape[1] - w
+    #     max_y = canvas.shape[0] - h
+    #     if max_x <= 0 or max_y <= 0:
+    #         continue
+    #     rand_x = random.randint(0, max_x)
+    #     rand_y = random.randint(0, max_y)
+    #     translated_contour = contour + np.array([[rand_x - x, rand_y - y]])
+    #     cv2.drawContours(canvas, [translated_contour], -1, 0, -1)  # fill with 0
+
 def obtain_cdf(x: list) -> tuple[list, list]:
     """
     Obtain the cumulative distribution function (CDF) of a list of values.
@@ -439,3 +526,20 @@ def obtain_cdf(x: list) -> tuple[list, list]:
     x_cdf = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
 
     return list(x_sorted), list(x_cdf)
+
+
+def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downloaded.zip"):
+    """
+    Download a .zip file from Google Drive and extract it in the current folder.
+
+    :param file_id: Google Drive file ID of the .zip file
+    :param output_zip: Name of the .zip file to be saved locally
+    """
+
+    url = f"https://drive.google.com/uc?id={file_id}"
+    print(f"Downloading {output_zip}...")
+    gdown.download(url, output_zip, quiet=False)
+    print(f"Extracting {output_zip}...")
+    with zipfile.ZipFile(output_zip, 'r') as zip_ref:
+        zip_ref.extractall(".")
+    print("Extraction concluded!")
