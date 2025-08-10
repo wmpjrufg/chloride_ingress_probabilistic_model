@@ -430,6 +430,36 @@ def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_pat
     df_filtered.to_csv("dataset_contours_aggregate_by_patch_filtered.csv", index=False)
 
 
+def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_objects: int, n_groups):
+    """
+    Sort contours using a uniform probability density function and group them. 
+
+    :param csv_path: Path to the CSV file with contour data
+    :param json_path: Path to the JSON file with contour data
+    :param n_objects: Number of objects to sample
+    :param n_groups: Number of groups to create
+
+    :return: Sorted and grouped contours
+    """
+
+    with open(json_path, 'r') as f:
+        contour_data = json.load(f)
+    df_json = pd.DataFrame.from_dict(contour_data, orient='index')
+    df_json['image_name'] = df_json.index
+    df_json = df_json.reset_index(drop=True)
+    df_csv = pd.read_csv(csv_path)
+    df_full = pd.merge(df_json, df_csv, on='image_name')
+    df_full = df_full[['image_name', 'x coordinate in 0,0', 'y coordinate in 0,0', 'diameter (px)', 'diameter (mm)', 'area (px)', 'area (mm2)']]
+
+    df_selected_contours = df_full.sample(n=n_objects)
+    df_sorted = df_selected_contours.sort_values('diameter (px)', ascending=False).reset_index(drop=True)
+    group_dim = np.array_split(df_sorted.index, n_groups)
+    df_sorted['group by diameter (px)'] = -1
+    for i, group in enumerate(group_dim):
+        df_sorted.loc[group, 'group by diameter (px)'] = i + 1
+
+    return df_sorted
+
 def generate_canvas_from_json(json_path, canvas_size, n_objects):
     """
     Generate a canvas image from contour data in a JSON file.
