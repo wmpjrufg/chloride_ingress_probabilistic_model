@@ -97,7 +97,7 @@ def centroid_polygon(x: list, y: list) -> tuple[float, float, list]:
     return centre.x, centre.y, coords
 
 
-def transport_polygon(x: list, y: list, x_new: float, y_new: float) -> tuple[list, list]:
+def trans_rota_polygon(x: list, y: list, x_new: float, y_new: float, angle: float = 0, originn: str = 'centroid') -> tuple[list, list]:
     """
     Translate a polygon defined by its vertices to a new position.
 
@@ -105,24 +105,21 @@ def transport_polygon(x: list, y: list, x_new: float, y_new: float) -> tuple[lis
     :param y: y-coordinates of the polygon vertices
     :param x_new: new x-coordinate for the centroid of the polygon
     :param y_new: new y-coordinate for the centroid of the polygon
+    :param angle: rotation angle in degrees (counter-clockwise)
+    :param origin: point to rotate around ('centroid' or 'center')
 
     :return: [0] = new x-coordinates of the polygon vertices, [1] = new y-coordinates of the polygon vertices
     """
 
-    x_g, y_g, coords = centroid_polygon(x, y)
-    dx = -x_g
-    dy = -y_g
-
-    # Translate the polygon to the origin
-    transl_polygon_00 = sh.affinity.translate(sh.geometry.Polygon(coords), xoff=dx, yoff=dy)
-
-    # Translate the polygon to the new position
-    transl_polygon_xy = sh.affinity.translate(transl_polygon_00, xoff=x_new, yoff=y_new)
-
-    # Extract the new x and y coordinates
-    x_trans = [po[0] for po in transl_polygon_xy.exterior.coords]
-    y_trans = [po[1] for po in transl_polygon_xy.exterior.coords]
-
+    coords = list(zip(x, y))
+    polygon = sh.geometry.Polygon(coords)
+    x_g, y_g = polygon.centroid.coords[0]
+    translated = sh.affinity.translate(polygon, xoff=-x_g, yoff=-y_g)
+    rotated = sh.affinity.rotate(translated, angle, origin=originn)
+    transformed = sh.affinity.translate(rotated, xoff=x_new, yoff=y_new)
+    x_trans = [p[0] for p in transformed.exterior.coords]
+    y_trans = [p[1] for p in transformed.exterior.coords]
+    
     return x_trans, y_trans
 
 
@@ -144,7 +141,7 @@ def crop_contours(json_file: str, output_dir: str, canvas_size: int = 512) -> No
             x_coords = contour["x coordinate in 0,0"]
             y_coords = contour["y coordinate in 0,0"]
             x_new, y_new = canvas_size // 2, canvas_size // 2
-            x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
+            x_trans, y_trans = trans_rota_polygon(x_coords, y_coords, x_new, y_new)
             blank = np.zeros((canvas_size, canvas_size), dtype=np.uint8)
             pts = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
             cv2.drawContours(blank, [pts], -1, color=255, thickness=cv2.FILLED)
@@ -272,7 +269,7 @@ def process_images_to_json(filepath: str, name_output_json: str, output_path_to_
             coords = contour[:, 0, :]
             x_coords = coords[:, 0].tolist()
             y_coords = coords[:, 1].tolist()
-            x_00, y_00 = transport_polygon(x_coords, y_coords, 0 , 0)
+            x_00, y_00 = trans_rota_polygon(x_coords, y_coords, 0 , 0)
             area = cv2.contourArea(contour)
             q_ga = area
             q_pic = float(area / image_area)
@@ -375,7 +372,7 @@ def plot_contours_from_json(json_file: str, keys_to_plot: list, width: int = 250
         # Patch
         canvas_size = 512
         patch_img = np.zeros((canvas_size, canvas_size, 3), dtype=np.uint8)
-        x_trans, y_trans = transport_polygon(x_rand, y_rand, canvas_size // 2, canvas_size // 2)
+        x_trans, y_trans = trans_rota_polygon(x_rand, y_rand, canvas_size // 2, canvas_size // 2)
         pts_centered = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
         cv2.drawContours(patch_img, [pts_centered], -1, (255, 255, 0), thickness=cv2.FILLED)
 
@@ -460,6 +457,7 @@ def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_o
 
     return df_sorted
 
+
 def generate_canvas_from_json(json_path, canvas_size, n_objects):
     """
     Generate a canvas image from contour data in a JSON file.
@@ -493,7 +491,7 @@ def generate_canvas_from_json(json_path, canvas_size, n_objects):
     #     x_coords = contour_data[value]["x coordinate in 0,0"]
     #     y_coords = contour_data[value]["y coordinate in 0,0"]
     #     x_new, y_new = x_centroids[id], y_centroids[id]
-    #     x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
+    #     x_trans, y_trans = trans_rota_polygon(x_coords, y_coords, x_new, y_new)
     #     blank = np.zeros((canvas_size[0], canvas_size[1]), dtype=np.uint8)
     #     pts = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
     #     cv2.drawContours(blank, [pts], -1, color=255, thickness=cv2.FILLED)
@@ -510,7 +508,7 @@ def generate_canvas_from_json(json_path, canvas_size, n_objects):
         x_coords = contour_data[value]["x coordinate in 0,0"]
         y_coords = contour_data[value]["y coordinate in 0,0"]
         x_new, y_new = x_centroids[id], y_centroids[id]
-        x_trans, y_trans = transport_polygon(x_coords, y_coords, x_new, y_new)
+        x_trans, y_trans = trans_rota_polygon(x_coords, y_coords, x_new, y_new)
 
         blank = np.zeros(canvas_size, dtype=np.uint8)
         pts = np.array(list(zip(x_trans, y_trans)), dtype=np.int32).reshape((-1, 1, 2))
@@ -543,6 +541,7 @@ def generate_canvas_from_json(json_path, canvas_size, n_objects):
     #     translated_contour = contour + np.array([[rand_x - x, rand_y - y]])
     #     cv2.drawContours(canvas, [translated_contour], -1, 0, -1)  # fill with 0
 
+
 def obtain_cdf(x: list) -> tuple[list, list]:
     """
     Obtain the cumulative distribution function (CDF) of a list of values.
@@ -556,6 +555,22 @@ def obtain_cdf(x: list) -> tuple[list, list]:
     x_cdf = np.arange(1, len(x_sorted) + 1) / len(x_sorted)
 
     return list(x_sorted), list(x_cdf)
+
+
+def noise_point(y: list, value_noise: float = 1):
+    """
+    Apply noise to a list of values.
+
+    :param y: input values
+    :param value_noise: noise percentage. 0 to 100
+
+    :return: Values with noise applied
+    """
+
+    noise_perc = [float(i)/100 for i in list(np.random.uniform(-value_noise, value_noise, size=len(y)))]
+    y_noise = [i + i*j for i, j in zip(y, noise_perc)]
+
+    return y_noise
 
 
 def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downloaded.zip"):
