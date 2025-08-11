@@ -11,6 +11,7 @@ import shapely as sh
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import scipy as sc
 import gdown
 import scipy
 
@@ -394,7 +395,7 @@ def plot_contours_from_json(json_file: str, keys_to_plot: list, width: int = 250
         plt.show()
 
 
-def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_patch.csv", image_dir: str = "dataset/binary_patchs", output_dir: str = "dataset/binary_patchs_filtered", threshold_diam_mm: float = 15.0) -> None:
+def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_patch.csv", image_dir: str = "dataset/binary_patchs", output_dir: str = "dataset/binary_patchs_filtered", contours_json_path: str = "dataset_contours_aggregate_by_patch.json", threshold_diam_mm: float = 15.0) -> None:
     """
     Read a set of images and delete all the images whose diameter is greater than to the specified threshold.
 
@@ -404,27 +405,45 @@ def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_pat
     :param threshold_diam_mm: Diameter threshold for filtering (default: 15.0 mm)
     """
 
-    # Filter
+    # Load CSV
     df = pd.read_csv(csv_path)
     os.makedirs(output_dir, exist_ok=True)
-    df_filtered = df[df['diameter (mm)'] < threshold_diam_mm]
-    n_total_img = len(df)
-    n_filtered_img = len(df_filtered)
 
-    # Save images
-    for _, row in df.iterrows():
-        image_name = row['image_name']
-        d_mm = row['diameter (mm)']
-        if d_mm < threshold_diam_mm:
-            src_path = os.path.join(image_dir, image_name)
-            dst_path = os.path.join(output_dir, image_name)
-            if os.path.exists(src_path):
-                shutil.copy(src_path, dst_path)
+    # Filter by diameter
+    df_filtered = df[df['diameter (mm)'] < threshold_diam_mm]
+    filtered_image_names = set(df_filtered['image_name'].tolist())
+
+    n_total_images = len(df)
+    n_filtered_images = len(df_filtered)
+
+    # Copy filtered images
+    for image_name in filtered_image_names:
+        src_path = os.path.join(image_dir, image_name)
+        dst_path = os.path.join(output_dir, image_name)
+        if os.path.exists(src_path):
+            shutil.copy(src_path, dst_path)
+
+    # Save filtered CSV
+    csv_filtered_path = os.path.splitext(csv_path)[0] + "_filtered.csv"
+    df_filtered.to_csv(csv_filtered_path, index=False)
+
+    # Load full contours JSON
+    with open(contours_json_path, "r") as f:
+        contours_data = json.load(f)
+
+    # Filter contours JSON to keep only keys in filtered_image_names
+    filtered_contours = {k: v for k, v in contours_data.items() if k in filtered_image_names}
+
+    # Save filtered contours JSON
+    json_filtered_path = os.path.splitext(contours_json_path)[0] + "_filtered.json"
+    with open(json_filtered_path, "w") as f:
+        json.dump(filtered_contours, f, indent=4)
 
     print(f"\nImages with diameter < {threshold_diam_mm} mm copied to: {output_dir}")
-    print(f"Total images copied: {n_filtered_img}")
-    print(f"Total images removed (>= {threshold_diam_mm} mm): {n_total_img - n_filtered_img}")
-    df_filtered.to_csv("dataset_contours_aggregate_by_patch_filtered.csv", index=False)
+    print(f"Total images copied: {n_filtered_images}")
+    print(f"Total images removed (>= {threshold_diam_mm} mm): {n_total_images - n_filtered_images}")
+    print(f"Filtered CSV saved to: {csv_filtered_path}")
+    print(f"Filtered contours JSON saved to: {json_filtered_path}")
 
 
 def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_objects: int, n_groups):
@@ -588,3 +607,94 @@ def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downlo
     with zipfile.ZipFile(output_zip, 'r') as zip_ref:
         zip_ref.extractall(".")
     print("Extraction concluded!")
+
+
+def gross_section_from_dataset(
+    csv_path: str = "dataset_contours_aggregate_by_patch.csv",
+    json_path: str = "dataset_contours_aggregate_by_patch.json",
+    n_objects: int = 300,
+    div: int = 20,
+    output_image_path: str = "gross_section.png",
+    output_json_path: str = "gross_section.json"
+):
+    """
+    Generates a 2500x2500 image with non-overlapping aggregates (gross section),
+    crops it to remove empty areas, saves the cropped image,
+    then reads the saved image again to extract contours exactly as saved,
+    and finally writes these contours to JSON to guarantee perfect match.
+    """
+
+    # === 1) Load and organize aggregates ===
+    df = sort_contours_using_uniform_pdf_and_group(csv_path, json_path, n_objects, div)
+    img_w, img_h = 2500, 2500
+    img_canvas = np.zeros((img_h, img_w), dtype=np.uint8)  # black background
+    final_contours = []
+
+    for m, row in df.iterrows():
+        placed = False
+        max_iter = 10
+        attempts = 0
+
+        while not placed and attempts < max_iter:
+            # Random center sampling
+            sampler = sc.stats.qmc.LatinHypercube(d=2)
+            centroids = sc.stats.qmc.scale(sampler.random(1), [0, 0], [img_w, img_h])
+            cx, cy = centroids[0, 0], centroids[0, 1]
+
+            # Add noise to center
+            cx_noise = noise_point([cx], value_noise=1 if m < 1 else 5)
+            cy_noise = noise_point([cy], value_noise=1 if m < 1 else 5)
+
+            # Rotate and translate polygon
+            x_df = row['x coordinate in 0,0']
+            y_df = row['y coordinate in 0,0']
+            x_new, y_new = trans_rota_polygon(
+                x_df, y_df, cx_noise[0], cy_noise[0], 
+                angle=np.random.uniform(0, 360)
+            )
+            current_contour = list(zip(x_new, y_new))
+            poly = sh.geometry.Polygon(current_contour)
+
+            # Check collision
+            collision = any(poly.intersects(sh.geometry.Polygon(c)) for c in final_contours)
+
+            if not collision:
+                final_contours.append(current_contour)
+                pts = np.array(current_contour, dtype=np.int32)
+                cv2.fillPoly(img_canvas, [pts], 255)
+                placed = True
+            attempts += 1
+
+    # Crop to remove empty areas
+    coords = cv2.findNonZero(img_canvas)
+    x, y, w, h = cv2.boundingRect(coords)
+    cropped_img = img_canvas[y:y+h, x:x+w]
+
+    # Save cropped image FIRST
+    cv2.imwrite(output_image_path, cropped_img)
+
+    # Re-open saved image to extract contours exactly as saved
+    reloaded_img = cv2.imread(output_image_path, cv2.IMREAD_GRAYSCALE)
+    if reloaded_img is None:
+        raise FileNotFoundError(f"Could not read saved image at {output_image_path}")
+
+    contours_found, _ = cv2.findContours(reloaded_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Convert contours to list of points for JSON
+    adjusted_contours = []
+    for cnt in contours_found:
+        cnt_list = [(float(pt[0][0]), float(pt[0][1])) for pt in cnt]
+        adjusted_contours.append(cnt_list)
+
+    # Save JSON contours
+    with open(output_json_path, "w") as f:
+        json.dump({"contours": adjusted_contours}, f, indent=4)
+
+    # Show final image
+    plt.imshow(cropped_img, cmap='gray')
+    plt.axis('off')
+    plt.show()
+
+    print(f"Gross section generated: {output_image_path}")
+    print(f"Contours saved to: {output_json_path}")
+    print(f"Final size: {w}x{h} px")
