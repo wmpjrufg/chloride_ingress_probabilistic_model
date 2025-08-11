@@ -1,0 +1,13 @@
+numpy
+matplotlib
+opencv-python
+ipython
+scipy
+meshio
+gmsh
+ipykernel
+torch
+torchvision
+shapely
+pandas
+gdown

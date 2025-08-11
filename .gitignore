@@ -1,0 +1,4 @@
+ambiente_chloride/
+env/
+__pycache__/
+*.pyc
