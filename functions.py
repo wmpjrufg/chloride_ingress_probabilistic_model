@@ -2,11 +2,11 @@
 import json
 import os
 import random
-import cv2
 import shutil
 from typing import Sequence
 import zipfile
 
+import cv2
 import shapely as sh
 import numpy as np
 import matplotlib.pyplot as plt
