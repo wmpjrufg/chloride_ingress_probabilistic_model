@@ -624,9 +624,9 @@ def gross_section_from_dataset(
     and finally writes these contours to JSON to guarantee perfect match.
     """
 
-    # === 1) Load and organize aggregates ===
+    # Load and organize aggregates
     df = sort_contours_using_uniform_pdf_and_group(csv_path, json_path, n_objects, div)
-    img_w, img_h = 2500, 2500
+    img_w, img_h = 5000, 5000
     img_canvas = np.zeros((img_h, img_w), dtype=np.uint8)  # black background
     final_contours = []
 
