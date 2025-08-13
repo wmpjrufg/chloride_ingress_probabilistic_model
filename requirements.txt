@@ -10,3 +10,4 @@ torch
 torchvision
 shapely
 streamlit
+opencv-python-headless
