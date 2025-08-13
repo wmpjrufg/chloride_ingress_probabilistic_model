@@ -609,92 +609,111 @@ def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downlo
     print("Extraction concluded!")
 
 
-def gross_section_from_dataset(
-    csv_path: str = "dataset_contours_aggregate_by_patch.csv",
-    json_path: str = "dataset_contours_aggregate_by_patch.json",
-    n_objects: int = 300,
-    div: int = 20,
-    output_image_path: str = "gross_section.png",
-    output_json_path: str = "gross_section.json"
-):
+def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset_csv: str = "dataset_contours_aggregate_by_patch.csv", dataset_json: str = "dataset_contours_aggregate_by_patch.json", output_json: str = "output_contour.json", output_img: str = "output_contour.png") -> None:
     """
-    Generates a 2500x2500 image with non-overlapping aggregates (gross section),
-    crops it to remove empty areas, saves the cropped image,
-    then reads the saved image again to extract contours exactly as saved,
-    and finally writes these contours to JSON to guarantee perfect match.
+    Generate a cross-section contour from the given parameters and save image and contour dataset in the specified output paths.
+
+    :param img_w_mm: Width of the image in millimeters.
+    :param img_h_mm: Height of the image in millimeters.
+    :param n_s: Number of samples. Default is 350.
+    :param dataset_csv: Path to the dataset CSV file. Default is "dataset_contours_aggregate_by_patch.csv".
+    :param dataset_json: Path to the dataset JSON file. Default is "dataset_contours_aggregate_by_patch.json".
+    :param output_json: Path to the output JSON file. Default is "output_contour.json".
+    :param output_img: Path to the output image file. Default is "output_contour.png".
     """
+    # Load dataset contours
+    df = sort_contours_using_uniform_pdf_and_group(dataset_csv,dataset_json, n_s)
 
-    # Load and organize aggregates
-    df = sort_contours_using_uniform_pdf_and_group(csv_path, json_path, n_objects, div)
-    img_w, img_h = 5000, 5000
-    img_canvas = np.zeros((img_h, img_w), dtype=np.uint8)  # black background
-    final_contours = []
+    # Convert mm to px
+    img_w_px = img_w_mm * 2500 / 75
+    img_h_px = img_h_mm * 2500 / 75
 
+    # Generate non-colliding contours
+    contours = []
     for m, row in df.iterrows():
-        placed = False
-        max_iter = 10
-        attempts = 0
+        sampler = sc.stats.qmc.LatinHypercube(d=2)
+        centroids = sc.stats.qmc.scale(sampler.random(n=1), [0, 0], [img_w_px, img_h_px]).squeeze()
 
-        while not placed and attempts < max_iter:
-            # Random center sampling
-            sampler = sc.stats.qmc.LatinHypercube(d=2)
-            centroids = sc.stats.qmc.scale(sampler.random(1), [0, 0], [img_w, img_h])
-            cx, cy = centroids[0, 0], centroids[0, 1]
+        cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
+        cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
 
-            # Add noise to center
-            cx_noise = noise_point([cx], value_noise=1 if m < 1 else 5)
-            cy_noise = noise_point([cy], value_noise=1 if m < 1 else 5)
+        # Contour candidate
+        x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
+        candidate = list(zip(x_new, y_new))
 
-            # Rotate and translate polygon
-            x_df = row['x coordinate in 0,0']
-            y_df = row['y coordinate in 0,0']
-            x_new, y_new = trans_rota_polygon(
-                x_df, y_df, cx_noise[0], cy_noise[0], 
-                angle=np.random.uniform(0, 360)
-            )
-            current_contour = list(zip(x_new, y_new))
-            poly = sh.geometry.Polygon(current_contour)
+        if m == 0:
+            contours.append(candidate)
+        else:
+            cand_poly = sh.geometry.Polygon(candidate)
+            collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
+            tries = 0
+            while collide and tries < 100:
+                centroids = sc.stats.qmc.scale(sampler.random(n=1), [0, 0], [img_w_px, img_h_px]).squeeze()
+                cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
+                cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
+                x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
+                candidate = list(zip(x_new, y_new))
+                cand_poly = sh.geometry.Polygon(candidate)
+                collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
+                tries += 1
 
-            # Check collision
-            collision = any(poly.intersects(sh.geometry.Polygon(c)) for c in final_contours)
+            if not collide:
+                contours.append(candidate)
 
-            if not collision:
-                final_contours.append(current_contour)
-                pts = np.array(current_contour, dtype=np.int32)
-                cv2.fillPoly(img_canvas, [pts], 255)
-                placed = True
-            attempts += 1
+    # Crop contours
+    cropped_contours = []
+    for cont in contours:
+        xs, ys = zip(*cont)
+        xs = np.array(xs)
+        ys = np.array(ys)
 
-    # Crop to remove empty areas
-    coords = cv2.findNonZero(img_canvas)
-    x, y, w, h = cv2.boundingRect(coords)
-    cropped_img = img_canvas[y:y+h, x:x+w]
+        all_out_x = np.all((xs < 0) | (xs > img_w_px))
+        all_out_y = np.all((ys < 0) | (ys > img_h_px))
+        if all_out_x or all_out_y:
+            continue
 
-    # Save cropped image FIRST
-    cv2.imwrite(output_image_path, cropped_img)
+        xs_clipped = np.clip(xs, 0, img_w_px)
+        ys_clipped = np.clip(ys, 0, img_h_px)
 
-    # Re-open saved image to extract contours exactly as saved
-    reloaded_img = cv2.imread(output_image_path, cv2.IMREAD_GRAYSCALE)
-    if reloaded_img is None:
-        raise FileNotFoundError(f"Could not read saved image at {output_image_path}")
+        cropped_contours.append(list(zip(xs_clipped, ys_clipped)))
 
-    contours_found, _ = cv2.findContours(reloaded_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Boundary
+    boundary = [[0, 0], [img_w_px, 0], [img_w_px, img_h_px], [0, img_h_px], [0, 0]]
 
-    # Convert contours to list of points for JSON
-    adjusted_contours = []
-    for cnt in contours_found:
-        cnt_list = [(float(pt[0][0]), float(pt[0][1])) for pt in cnt]
-        adjusted_contours.append(cnt_list)
+    # Format JSON
+    data = {}
+    for i, cont in enumerate(cropped_contours, start=1):
+        xs, ys = zip(*cont)
+        data[f"{i:02}"] = {
+            "x coordinate": [float(x) for x in xs],
+            "y coordinate": [float(y) for y in ys]
+        }
 
-    # Save JSON contours
-    with open(output_json_path, "w") as f:
-        json.dump({"contours": adjusted_contours}, f, indent=4)
+    bx, by = zip(*boundary)
+    data["boundary"] = {
+        "x coordinate": [float(x) for x in bx],
+        "y coordinate": [float(y) for y in by]
+    }
 
-    # Show final image
-    plt.imshow(cropped_img, cmap='gray')
-    plt.axis('off')
+    with open(output_json, "w") as f:
+        json.dump(data, f, indent=2)
+
+    # Plot
+    H, W = int(np.round(img_h_px)), int(np.round(img_w_px))
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.imshow(np.zeros((H, W)), cmap="gray")
+
+    for cont in cropped_contours:
+        xs, ys = zip(*cont)
+        ax.plot(xs, ys, color='white', linewidth=1)
+        ax.fill(xs, ys, color='white', alpha=1)
+
+    bx, by = zip(*boundary)
+    ax.plot(bx, by, color='black', linewidth=2)
+
+    ax.set_xlim(0, img_w_px)
+    ax.set_ylim(img_h_px, 0)
+    ax.axis('off')
+
+    plt.savefig(output_img, dpi=600, bbox_inches='tight', pad_inches=0)
     plt.show()
-
-    print(f"Gross section generated: {output_image_path}")
-    print(f"Contours saved to: {output_json_path}")
-    print(f"Final size: {w}x{h} px")
