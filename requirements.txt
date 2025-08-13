@@ -9,5 +9,5 @@ torch
 torchvision
 shapely
 streamlit
-opencv-python-headless
+opencv-python
 gdown
