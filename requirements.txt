@@ -11,3 +11,4 @@ torchvision
 shapely
 streamlit
 opencv-python-headless
+gdown
