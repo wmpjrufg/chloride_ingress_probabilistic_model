@@ -446,7 +446,7 @@ def filter_images_by_diameter(csv_path: str = "dataset_contours_aggregate_by_pat
     print(f"Filtered contours JSON saved to: {json_filtered_path}")
 
 
-def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_objects: int, n_groups):
+def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_objects: int, n_groups: int = 20):
     """
     Sort contours using a uniform probability density function and group them. 
 
