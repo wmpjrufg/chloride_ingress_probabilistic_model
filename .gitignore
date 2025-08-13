@@ -1,4 +1,5 @@
 ambiente_chloride/
 env/
 __pycache__/
+dataset/
 *.pyc
