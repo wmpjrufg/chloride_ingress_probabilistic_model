@@ -6,11 +6,11 @@ This is a repository to save a source code.
 - [Streamlit framework](https://crossgen.streamlit.app/)  
    
 Authors:  
-- Wanderlei Malaquias Pereira Junior
-- Ketson R. M. dos Santos
-- Mahmoud Shaqfa
-- Luiz Henrique Rézio
-- João Gabriel Duarte
+- Wanderlei Malaquias Pereira Junior  
+- Ketson R. M. dos Santos 
+- Mahmoud Shaqfa  
+- Luiz Henrique Rézio  
+- João Gabriel Duarte  
   
 # Active env
 `env\Scripts\activate`

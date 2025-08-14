@@ -609,7 +609,7 @@ def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downlo
     print("Extraction concluded!")
 
 
-def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset_csv: str = "dataset_contours_aggregate_by_patch.csv", dataset_json: str = "dataset_contours_aggregate_by_patch.json", output_json: str = "output_contour.json", output_img: str = "output_contour.png") -> None:
+def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json", output_json: str = "output_contour.json", output_img: str = "output_contour.png") -> None:
     """
     Generate a cross-section contour from the given parameters and save image and contour dataset in the specified output paths.
 
@@ -647,7 +647,7 @@ def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset
             cand_poly = sh.geometry.Polygon(candidate)
             collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
             tries = 0
-            while collide and tries < 100:
+            while collide and tries < 50:
                 centroids = sc.stats.qmc.scale(sampler.random(n=1), [0, 0], [img_w_px, img_h_px]).squeeze()
                 cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
                 cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]

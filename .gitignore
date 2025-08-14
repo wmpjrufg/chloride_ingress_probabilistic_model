@@ -1,5 +1,11 @@
+# Folders
 ambiente_chloride/
 env/
 __pycache__/
 dataset/
+
+# Files
+*.json
+*.csv
 *.pyc
+file_downloaded.zip
