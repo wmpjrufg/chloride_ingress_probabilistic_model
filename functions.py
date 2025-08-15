@@ -13,6 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import scipy as sc
+from shapely.geometry import Polygon
 import gdown
 
 
@@ -906,3 +907,49 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
     # plt.show()
 
     return data
+
+
+def clean_contour_into_other_contour(contours_dict: dict) -> dict:
+    """
+    Remove contornos que estão completamente dentro de outro contorno.
+    O menor contorno é deletado. Itera até que não haja mais sobreposição interna.
+    """
+    cleaned_dict = contours_dict.copy()
+    changed = True
+
+    while changed:
+        changed = False
+        keys = list(cleaned_dict.keys())
+        polygons = [(k, Polygon(list(zip(cleaned_dict[k]["x coordinate"],
+                                         cleaned_dict[k]["y coordinate"])))) for k in keys]
+
+        to_delete = set()
+
+        for i in range(len(polygons)):
+            k1, poly1 = polygons[i]
+            if k1 in to_delete:
+                continue
+            for j in range(len(polygons)):
+                if i == j:
+                    continue
+                k2, poly2 = polygons[j]
+                if k2 in to_delete:
+                    continue
+
+                if poly1.contains(poly2):
+                    # deleta o menor
+                    if poly1.area >= poly2.area:
+                        to_delete.add(k2)
+                    else:
+                        to_delete.add(k1)
+                elif poly2.contains(poly1):
+                    if poly2.area >= poly1.area:
+                        to_delete.add(k1)
+                    else:
+                        to_delete.add(k2)
+
+        if to_delete:
+            changed = True
+            cleaned_dict = {k: v for k, v in cleaned_dict.items() if k not in to_delete}
+
+    return cleaned_dict
