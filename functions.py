@@ -480,16 +480,28 @@ def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_o
     :return: Sorted and grouped contours
     """
 
+    # Carrega o JSON e transforma em DataFrame
     with open(json_path, 'r') as f:
         contour_data = json.load(f)
     df_json = pd.DataFrame.from_dict(contour_data, orient='index')
     df_json['image_name'] = df_json.index
     df_json = df_json.reset_index(drop=True)
-    df_csv = pd.read_csv(csv_path)
-    df_full = pd.merge(df_json, df_csv, on='image_name')
-    df_full = df_full[['image_name', 'x coordinate in 0,0', 'y coordinate in 0,0', 'diameter (px)', 'diameter (mm)', 'area (px)', 'area (mm2)']]
 
-    df_selected_contours = df_full.sample(n=n_objects)
+    # Carrega o CSV
+    df_csv = pd.read_csv(csv_path)
+
+    # Faz o merge dos dois
+    df_full = pd.merge(df_json, df_csv, on='image_name')
+    df_full = df_full[['image_name', 'x coordinate in 0,0', 'y coordinate in 0,0',
+                       'diameter (px)', 'diameter (mm)', 'area (px)', 'area (mm2)']]
+
+    # Define se precisa repetir amostras
+    replace_flag = n_objects > len(df_full)
+
+    # Amostragem (com repetição se necessário)
+    df_selected_contours = df_full.sample(n=n_objects, replace=replace_flag)
+
+    # Ordena pelo diâmetro e cria grupos
     df_sorted = df_selected_contours.sort_values('diameter (px)', ascending=False).reset_index(drop=True)
     group_dim = np.array_split(df_sorted.index, n_groups)
     df_sorted['group by diameter (px)'] = -1
