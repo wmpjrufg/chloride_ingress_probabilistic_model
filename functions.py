@@ -5,6 +5,7 @@ import random
 import shutil
 from typing import Sequence
 import zipfile
+import time as ti
 
 import cv2
 import shapely as sh
@@ -13,7 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import scipy as sc
 import gdown
-import scipy
+
 
 
 def transform_contours_dict(contours: Sequence) -> dict: 
@@ -96,6 +97,27 @@ def centroid_polygon(x: list, y: list) -> tuple[float, float, list]:
     centre = polyg.centroid
 
     return centre.x, centre.y, coords
+
+
+def trans_polygon_to_x_y(x: list, y: list, d_x: float, d_y: float) -> tuple[list, list]:
+    """
+    Translate a polygon defined by its vertices to a new position.
+
+    :param x: x-coordinates of the polygon vertices
+    :param y: y-coordinates of the polygon vertices
+    :param x_new: new x-coordinate for the 0,0 of the polygon
+    :param y_new: new y-coordinate for the 0,0 of the polygon
+
+    :return: [0] = new x-coordinates of the polygon vertices, [1] = new y-coordinates of the polygon vertices
+    """
+
+    coords = list(zip(x, y))
+    polygon = sh.geometry.Polygon(coords)
+    translated = sh.affinity.translate(polygon, xoff=d_x, yoff=d_y)
+    x_trans = [p[0] for p in translated.exterior.coords]
+    y_trans = [p[1] for p in translated.exterior.coords]
+
+    return x_trans, y_trans
 
 
 def trans_rota_polygon(x: list, y: list, x_new: float, y_new: float, angle: float = 0, originn: str = 'centroid') -> tuple[list, list]:
@@ -576,6 +598,15 @@ def obtain_cdf(x: list) -> tuple[list, list]:
     return list(x_sorted), list(x_cdf)
 
 
+def groups_within_radius(trees, point, r = 50):
+    hits = []
+    for gi, t in enumerate(trees):
+        idxs = t.query_ball_point(point, r)
+        if idxs:               # se houver ao menos um vizinho naquele grupo
+            hits.append(gi)    # gi = índice do grupo em data_points
+    return hits
+
+
 def noise_point(y: list, value_noise: float = 1):
     """
     Apply noise to a list of values.
@@ -609,30 +640,41 @@ def download_and_extract_gdrive_zip(file_id: str, output_zip: str = "file_downlo
     print("Extraction concluded!")
 
 
-def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json", output_json: str = "output_contour.json", output_img: str = "output_contour.png") -> None:
+def normalize_contours(contours, drop_last_if_closed=True):
+    """contours: list[list[tuple(x,y)]]. Retorna list[np.ndarray(N,2)]."""
+    arrays = []
+    for pts in contours:
+        arr = np.asarray(pts, dtype=float).reshape(-1, 2)
+        # remove o último ponto se for igual ao primeiro (contorno fechado)
+        if drop_last_if_closed and len(arr) > 1 and np.allclose(arr[0], arr[-1]):
+            arr = arr[:-1]
+        arrays.append(arr)
+    return arrays
+
+
+def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json") -> dict:
     """
     Generate a cross-section contour from the given parameters and save image and contour dataset in the specified output paths.
 
-    :param img_w_mm: Width of the image in millimeters.
-    :param img_h_mm: Height of the image in millimeters.
-    :param n_s: Number of samples. Default is 350.
-    :param dataset_csv: Path to the dataset CSV file. Default is "dataset_contours_aggregate_by_patch.csv".
-    :param dataset_json: Path to the dataset JSON file. Default is "dataset_contours_aggregate_by_patch.json".
-    :param output_json: Path to the output JSON file. Default is "output_contour.json".
-    :param output_img: Path to the output image file. Default is "output_contour.png".
+    :param x_list: X coordinates of the boundary
+    :param y_list: Y coordinates of the boundary
+    :param n_s: Number of samples. Default is 300
+    :param dataset_csv: Path to the dataset CSV file. Default is "dataset_contours_aggregate_by_patch.csv"
+    :param dataset_json: Path to the dataset JSON file. Default is "dataset_contours_aggregate_by_patch.json"
+    # :param output_json: Path to the output JSON file. Default is "output_contour.json"
+    # :param output_img: Path to the output image file. Default is "output_contour.png"
+
+    :return: dataset with the cropped contours
     """
     # Load dataset contours
     df = sort_contours_using_uniform_pdf_and_group(dataset_csv,dataset_json, n_s)
 
-    # Convert mm to px
-    img_w_px = img_w_mm * 2500 / 75
-    img_h_px = img_h_mm * 2500 / 75
-
     # Generate non-colliding contours
     contours = []
+    
     for m, row in df.iterrows():
         sampler = sc.stats.qmc.LatinHypercube(d=2)
-        centroids = sc.stats.qmc.scale(sampler.random(n=1), [0, 0], [img_w_px, img_h_px]).squeeze()
+        centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
 
         cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
         cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
@@ -641,14 +683,17 @@ def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset
         x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
         candidate = list(zip(x_new, y_new))
 
+        # t0 = ti.perf_counter()
         if m == 0:
             contours.append(candidate)
+            print(f"First contour added: {candidate}")
+            print(f"Current contours: {contours}")
         else:
             cand_poly = sh.geometry.Polygon(candidate)
             collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
             tries = 0
             while collide and tries < 50:
-                centroids = sc.stats.qmc.scale(sampler.random(n=1), [0, 0], [img_w_px, img_h_px]).squeeze()
+                centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
                 cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
                 cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
                 x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
@@ -659,6 +704,7 @@ def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset
 
             if not collide:
                 contours.append(candidate)
+        # print(f"Plotting took {ti.perf_counter() - t0:.2f} seconds")
 
     # Crop contours
     cropped_contours = []
@@ -667,20 +713,19 @@ def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset
         xs = np.array(xs)
         ys = np.array(ys)
 
-        all_out_x = np.all((xs < 0) | (xs > img_w_px))
-        all_out_y = np.all((ys < 0) | (ys > img_h_px))
+        all_out_x = np.all((xs < x_list[0]) | (xs > x_list[2]))
+        all_out_y = np.all((ys < y_list[0]) | (ys > y_list[2]))
         if all_out_x or all_out_y:
             continue
 
-        xs_clipped = np.clip(xs, 0, img_w_px)
-        ys_clipped = np.clip(ys, 0, img_h_px)
+        xs_clipped = np.clip(xs, x_list[0], x_list[2])
+        ys_clipped = np.clip(ys, y_list[0], y_list[2])
 
         cropped_contours.append(list(zip(xs_clipped, ys_clipped)))
 
-    # Boundary
-    boundary = [[0, 0], [img_w_px, 0], [img_w_px, img_h_px], [0, img_h_px], [0, 0]]
+    # # Boundary
+    # boundary = [[x_list[0], 0], [x_list[2], 0], [x_list[2], y_list[2]], [x_list[0], y_list[2]], [x_list[0], 0]]
 
-    # Format JSON
     data = {}
     for i, cont in enumerate(cropped_contours, start=1):
         xs, ys = zip(*cont)
@@ -689,31 +734,163 @@ def generate_cross_section(img_w_mm: int, img_h_mm: int, n_s: int = 350, dataset
             "y coordinate": [float(y) for y in ys]
         }
 
-    bx, by = zip(*boundary)
-    data["boundary"] = {
-        "x coordinate": [float(x) for x in bx],
-        "y coordinate": [float(y) for y in by]
-    }
+    # bx, by = zip(*boundary)
+    # data["boundary"] = {
+    #     "x coordinate": [float(x) for x in bx],
+    #     "y coordinate": [float(y) for y in by]
+    # }
 
-    with open(output_json, "w") as f:
+    with open('output_json.json', "w") as f:
         json.dump(data, f, indent=2)
 
     # Plot
-    H, W = int(np.round(img_h_px)), int(np.round(img_w_px))
+    
     fig, ax = plt.subplots(figsize=(7, 7))
-    ax.imshow(np.zeros((H, W)), cmap="gray")
+    # ax.imshow(np.zeros((H, W)), cmap="gray")
 
     for cont in cropped_contours:
         xs, ys = zip(*cont)
-        ax.plot(xs, ys, color='white', linewidth=1)
-        ax.fill(xs, ys, color='white', alpha=1)
+        ax.plot(xs, ys, color='blue', linewidth=1)
+        ax.fill(xs, ys, color='blue', alpha=1)
 
-    bx, by = zip(*boundary)
-    ax.plot(bx, by, color='black', linewidth=2)
+    # bx, by = zip(*boundary)
+    # ax.plot(bx, by, color='black', linewidth=2)
 
-    ax.set_xlim(0, img_w_px)
-    ax.set_ylim(img_h_px, 0)
-    ax.axis('off')
+    # ax.set_xlim(0, img_w_px)
+    # ax.set_ylim(img_h_px, 0)
+    # ax.axis('off')
 
-    plt.savefig(output_img, dpi=600, bbox_inches='tight', pad_inches=0)
+    # plt.savefig(output_img, dpi=600, bbox_inches='tight', pad_inches=0)
     plt.show()
+
+    return data
+
+
+def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json") -> dict:
+    """
+    Generate a cross-section contour from the given parameters and save image and contour dataset in the specified output paths.
+
+    :param x_list: X coordinates of the boundary
+    :param y_list: Y coordinates of the boundary
+    :param n_s: Number of samples. Default is 300
+    :param dataset_csv: Path to the dataset CSV file. Default is "dataset_contours_aggregate_by_patch.csv"
+    :param dataset_json: Path to the dataset JSON file. Default is "dataset_contours_aggregate_by_patch.json"
+    # :param output_json: Path to the output JSON file. Default is "output_contour.json"
+    # :param output_img: Path to the output image file. Default is "output_contour.png"
+
+    :return: dataset with the cropped contours
+    """
+    # Load dataset contours
+    df = sort_contours_using_uniform_pdf_and_group(dataset_csv,dataset_json, n_s)
+
+    # Generate non-colliding contours
+    contours = []
+    
+    for m, row in df.iterrows():
+        sampler = sc.stats.qmc.LatinHypercube(d=2)
+        centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
+
+        cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
+        cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
+
+        # Contour candidate
+        x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
+        candidate = list(zip(x_new, y_new))
+
+        # t0 = ti.perf_counter()
+        if m == 0:
+            contours.append(candidate)
+        elif m > 0 and m < 10:
+            cand_poly = sh.geometry.Polygon(candidate)
+            collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
+            tries = 0
+            while collide and tries < 50:
+                centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
+                cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
+                cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
+                x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
+                candidate = list(zip(x_new, y_new))
+                cand_poly = sh.geometry.Polygon(candidate)
+                collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
+                tries += 1
+        else:
+            cand_poly = sh.geometry.Polygon(candidate)
+            data_contours = normalize_contours(contours, drop_last_if_closed=True)
+            trees = [sc.spatial.cKDTree(arr) for arr in data_contours if len(arr) > 0]
+            point = np.array([cx, cy])
+            ids = groups_within_radius(trees, point)
+            contours_filtered = [c for i, c in enumerate(contours) if i in ids]
+            collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours_filtered)
+            tries = 0
+            while collide and tries < 50:
+                centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
+                cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
+                cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
+                x_new, y_new = trans_rota_polygon(row['x coordinate in 0,0'], row['y coordinate in 0,0'], cx, cy, angle=float(np.random.uniform(0, 360)))
+                candidate = list(zip(x_new, y_new))
+                cand_poly = sh.geometry.Polygon(candidate)
+                collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours_filtered)
+                tries += 1            
+
+            if not collide:
+                contours.append(candidate)
+        # print(f"Plotting took {ti.perf_counter() - t0:.2f} seconds")
+
+    # Crop contours
+    cropped_contours = []
+    for cont in contours:
+        xs, ys = zip(*cont)
+        xs = np.array(xs)
+        ys = np.array(ys)
+
+        all_out_x = np.all((xs < x_list[0]) | (xs > x_list[2]))
+        all_out_y = np.all((ys < y_list[0]) | (ys > y_list[2]))
+        if all_out_x or all_out_y:
+            continue
+
+        xs_clipped = np.clip(xs, x_list[0], x_list[2])
+        ys_clipped = np.clip(ys, y_list[0], y_list[2])
+
+        cropped_contours.append(list(zip(xs_clipped, ys_clipped)))
+
+    # # Boundary
+    # boundary = [[x_list[0], 0], [x_list[2], 0], [x_list[2], y_list[2]], [x_list[0], y_list[2]], [x_list[0], 0]]
+
+    data = {}
+    for i, cont in enumerate(cropped_contours, start=1):
+        xs, ys = zip(*cont)
+        data[f"{i:02}"] = {
+            "x coordinate": [float(x) for x in xs],
+            "y coordinate": [float(y) for y in ys]
+        }
+
+    # bx, by = zip(*boundary)
+    # data["boundary"] = {
+    #     "x coordinate": [float(x) for x in bx],
+    #     "y coordinate": [float(y) for y in by]
+    # }
+
+    # with open('output_json.json', "w") as f:
+    #     json.dump(data, f, indent=2)
+
+    # Plot
+    
+    # fig, ax = plt.subplots(figsize=(7, 7))
+    # # ax.imshow(np.zeros((H, W)), cmap="gray")
+
+    # for cont in cropped_contours:
+    #     xs, ys = zip(*cont)
+    #     ax.plot(xs, ys, color='blue', linewidth=1)
+    #     # ax.fill(xs, ys, color='blue', alpha=1)
+
+    # # bx, by = zip(*boundary)
+    # # ax.plot(bx, by, color='black', linewidth=2)
+
+    # # ax.set_xlim(0, img_w_px)
+    # # ax.set_ylim(img_h_px, 0)
+    # # ax.axis('off')
+
+    # # plt.savefig(output_img, dpi=600, bbox_inches='tight', pad_inches=0)
+    # plt.show()
+
+    return data
