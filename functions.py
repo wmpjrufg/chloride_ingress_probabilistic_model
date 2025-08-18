@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import scipy as sc
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 import gdown
 
 
@@ -911,45 +912,64 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
 
 def clean_contour_into_other_contour(contours_dict: dict) -> dict:
     """
-    Remove contornos que estão completamente dentro de outro contorno.
-    O menor contorno é deletado. Itera até que não haja mais sobreposição interna.
+    Remove contornos internos (buracos) e retorna apenas polígonos sólidos.
+    Usa unary_union para consolidar os contornos.
     """
-    cleaned_dict = contours_dict.copy()
-    changed = True
+    # --- Constrói lista de polígonos ---
+    polygons = [Polygon(list(zip(v["x coordinate"], v["y coordinate"])))
+                for v in contours_dict.values()]
 
-    while changed:
-        changed = False
-        keys = list(cleaned_dict.keys())
-        polygons = [(k, Polygon(list(zip(cleaned_dict[k]["x coordinate"],
-                                         cleaned_dict[k]["y coordinate"])))) for k in keys]
+    # --- Une todos os polígonos ---
+    unioned = unary_union(polygons)
 
-        to_delete = set()
+    # Garante lista de polígonos
+    if unioned.geom_type == "Polygon":
+        polys = [unioned]
+    elif unioned.geom_type == "MultiPolygon":
+        polys = list(unioned.geoms)
+    else:
+        polys = []
 
-        for i in range(len(polygons)):
-            k1, poly1 = polygons[i]
-            if k1 in to_delete:
+    # --- Reconstrói apenas contornos externos ---
+    final_contours = {}
+    contour_id = 1
+    for poly in polys:
+        xs, ys = poly.exterior.xy
+        final_contours[f"{contour_id:02}"] = {
+            "x coordinate": list(xs),
+            "y coordinate": list(ys)
+        }
+        contour_id += 1
+
+    return final_contours
+
+
+def check_overlapping_contours(contours_dict: dict) -> int:
+    """
+    Verifica se existem contornos sobrepostos.
+    Retorna e imprime o número de pares de contornos que se sobrepõem.
+    """
+    keys = list(contours_dict.keys())
+    polygons = [(k, Polygon(list(zip(contours_dict[k]["x coordinate"],
+                                     contours_dict[k]["y coordinate"])))) 
+                                     for k in keys]
+
+    overlap_count = 0
+    checked_pairs = set()
+
+    for i in range(len(polygons)):
+        k1, poly1 = polygons[i]
+        for j in range(i+1, len(polygons)):
+            k2, poly2 = polygons[j]
+
+            # Evita comparar o mesmo par duas vezes
+            if (k1, k2) in checked_pairs or (k2, k1) in checked_pairs:
                 continue
-            for j in range(len(polygons)):
-                if i == j:
-                    continue
-                k2, poly2 = polygons[j]
-                if k2 in to_delete:
-                    continue
 
-                if poly1.contains(poly2):
-                    # deleta o menor
-                    if poly1.area >= poly2.area:
-                        to_delete.add(k2)
-                    else:
-                        to_delete.add(k1)
-                elif poly2.contains(poly1):
-                    if poly2.area >= poly1.area:
-                        to_delete.add(k1)
-                    else:
-                        to_delete.add(k2)
+            if poly1.intersects(poly2) and not poly1.touches(poly2):
+                overlap_count += 1
+                print(f"⚠️ Contornos {k1} e {k2} estão sobrepostos.")
+            checked_pairs.add((k1, k2))
 
-        if to_delete:
-            changed = True
-            cleaned_dict = {k: v for k, v in cleaned_dict.items() if k not in to_delete}
-
-    return cleaned_dict
+    print(f"\n🔎 Total de pares de contornos sobrepostos: {overlap_count}")
+    return overlap_count
