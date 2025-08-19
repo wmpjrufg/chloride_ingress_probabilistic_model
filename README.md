@@ -3,7 +3,8 @@
 This is a repository to save a source code.  
   
 - [Original dataset](https://data.uni-hannover.de/dataset/concrete-aggregate-benchmark)  
-- [Streamlit framework](https://crossgen.streamlit.app/)  
+- [Streamlit framework](https://crossgen.streamlit.app/) 
+- [Mahmoud functions](https://github.com/eesd-epfl/PIC2FEM) 
    
 Authors:  
 - Wanderlei Malaquias Pereira Junior  
