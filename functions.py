@@ -6,6 +6,7 @@ import shutil
 from typing import Sequence
 import zipfile
 import time as ti
+import pathlib
 
 import cv2
 import shapely as sh
@@ -894,3 +895,104 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
     # plt.show()
 
     return data
+
+
+def mesh_gen(dataset_json: str, mesh_size: float = 0.1, outfile: str = "output_contour.geo") -> None:
+    """
+    Generate mesh from dataset JSON.
+
+    :param dataset_json: Path to the dataset JSON file.
+    :param mesh_size: Size of the mesh elements.
+    :param outfile: Path to the output GEO file.
+    """
+
+    # Load dataset
+    with open(dataset_json, 'r') as file:
+        contours = json.load(file)
+    
+    # Contour keys
+    keys = sorted(contours.keys())
+    boundaries = [k for k in keys if str(contours[k].get("type","")).lower().strip() == "boundary"]
+    agg      = [k for k in keys if str(contours[k].get("type","")).lower().strip() == "aggregate"]
+    bar      = [k for k in keys if str(contours[k].get("type","")).lower().strip() == "rebar"]
+
+    geo = []
+    geo.append('// .geo by json contours')
+    geo.append('SetFactory("Built-in");')
+    geo.append('Geometry.Tolerance = 1e-10;')
+
+    # Add aggregate
+    cont_point = 1
+    cont_line = 1
+    # Line Loop (1) = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19};
+    # Plane Surface (1) = {1};
+    for id, k in enumerate(agg):
+        list_lines = []
+        geo.append('\n// Add aggregate {}'.format(k))
+        x = contours[k]['x coordinate']
+        y = contours[k]['y coordinate']
+        # Point
+        for i in range(len(x)):
+            geo.append('Point({}) = {{ {}, {}, 0, {} }};'.format(cont_point, x[i], y[i], mesh_size))
+            cont_point += 1
+        # Line
+        for j in range(len(x)-1):
+            list_lines.append(cont_line)
+            geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_line, cont_line + 1))
+            cont_line += 1
+        list_lines.append(cont_line)
+        geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_point - 1, cont_point - len(x)))
+        cont_line += 1
+        geo.append(f"Line Loop({id+1}) = {{{', '.join(map(str, list_lines))}}};")
+        geo.append(f"Plane Surface({id+1}) = {{{id+1}}};")
+    geo.append('Physical Surface("aggregate") = {{{}}};'.format(', '.join(map(str, range(1, len(agg)+1)))))
+
+    # Add rebar
+    id += 2
+    list_lines = []
+    geo.append('\n// Add rebar')
+    x = contours[bar[0]]['x coordinate']
+    y = contours[bar[0]]['y coordinate']
+    # Point
+    for i in range(len(x)):
+        geo.append('Point({}) = {{ {}, {}, 0, {} }};'.format(cont_point, x[i], y[i], mesh_size))
+        cont_point += 1
+    # Line
+    for j in range(len(x)-1):
+        list_lines.append(cont_line)
+        geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_line, cont_line + 1))
+        cont_line += 1
+    list_lines.append(cont_line)
+    geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_point - 1, cont_point - len(x)))
+    cont_line += 1
+    geo.append(f"Line Loop({id}) = {{{', '.join(map(str, list_lines))}}};")
+    geo.append(f"Plane Surface({id}) = {{{id}}};")
+    geo.append(f'Physical Surface("rebar") = {{{id}}};')
+
+    # Add mortar
+    id += 1
+    list_lines = []
+    geo.append('\n// Add mortar')
+    x = contours[boundaries[0]]['x coordinate']
+    y = contours[boundaries[0]]['y coordinate']
+    # Point
+    for i in range(len(x)):
+        geo.append('Point({}) = {{ {}, {}, 0, {} }};'.format(cont_point, x[i], y[i], mesh_size))
+        cont_point += 1
+    # Line
+    for j in range(len(x)-1):
+        list_lines.append(cont_line)
+        geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_line, cont_line + 1))
+        cont_line += 1
+    list_lines.append(cont_line)
+    geo.append('Line({}) = {{{}, {}}};'.format(cont_line, cont_point - 1, cont_point - len(x)))
+    cont_line += 1
+    geo.append(f"Line Loop({id}) = {{{', '.join(map(str, list_lines))}}};")
+    geo.append(f'Plane Surface({id})' + ' = {{{}}};'.format(', '.join(map(str, range(1, id+1)))))
+    geo.append(f'Physical Surface("mortar") = {{{id}}};')
+
+    geo.append("\nMesh 2;")
+    geo.append("Coherence Mesh;")
+    geo.append("Coherence;")
+    geo.append(f"Save \"{outfile}\";")
+    pathlib.Path(outfile).write_text("\n".join(geo), encoding="utf-8")
