@@ -653,7 +653,7 @@ def normalize_contours(contours, drop_last_if_closed=True):
     return arrays
 
 
-def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json") -> dict:
+def generate_cross_section_without_kdtree(x_list: list, y_list: list, n_s: int = 300, dataset_csv: str = "dataset_contours_aggregate_by_patch_filtered.csv", dataset_json: str = "dataset_contours_aggregate_by_patch_filtered.json") -> dict:
     """
     Generate a cross-section contour from the given parameters and save image and contour dataset in the specified output paths.
 
@@ -687,13 +687,11 @@ def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset
         # t0 = ti.perf_counter()
         if m == 0:
             contours.append(candidate)
-            print(f"First contour added: {candidate}")
-            print(f"Current contours: {contours}")
         else:
             cand_poly = sh.geometry.Polygon(candidate)
             collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours)
             tries = 0
-            while collide and tries < 50:
+            while collide and tries < 20:
                 centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
                 cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
                 cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
@@ -732,7 +730,8 @@ def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset
         xs, ys = zip(*cont)
         data[f"{i:02}"] = {
             "x coordinate": [float(x) for x in xs],
-            "y coordinate": [float(y) for y in ys]
+            "y coordinate": [float(y) for y in ys],
+            "type": "aggregate"
         }
 
     # bx, by = zip(*boundary)
@@ -741,18 +740,18 @@ def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset
     #     "y coordinate": [float(y) for y in by]
     # }
 
-    with open('output_json.json', "w") as f:
-        json.dump(data, f, indent=2)
+    # with open('output_json.json', "w") as f:
+    #     json.dump(data, f, indent=2)
 
     # Plot
     
-    fig, ax = plt.subplots(figsize=(7, 7))
-    # ax.imshow(np.zeros((H, W)), cmap="gray")
+    # fig, ax = plt.subplots(figsize=(7, 7))
+    # # ax.imshow(np.zeros((H, W)), cmap="gray")
 
-    for cont in cropped_contours:
-        xs, ys = zip(*cont)
-        ax.plot(xs, ys, color='blue', linewidth=1)
-        ax.fill(xs, ys, color='blue', alpha=1)
+    # for cont in cropped_contours:
+    #     xs, ys = zip(*cont)
+    #     ax.plot(xs, ys, color='blue', linewidth=1)
+    #     ax.fill(xs, ys, color='blue', alpha=1)
 
     # bx, by = zip(*boundary)
     # ax.plot(bx, by, color='black', linewidth=2)
@@ -762,7 +761,7 @@ def generate_cross_section_w(x_list: list, y_list: list, n_s: int = 300, dataset
     # ax.axis('off')
 
     # plt.savefig(output_img, dpi=600, bbox_inches='tight', pad_inches=0)
-    plt.show()
+    # plt.show()
 
     return data
 
@@ -823,7 +822,7 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
             contours_filtered = [c for i, c in enumerate(contours) if i in ids]
             collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours_filtered)
             tries = 0
-            while collide and tries < 50:
+            while collide and tries < 20:
                 centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
                 cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
                 cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
@@ -862,7 +861,8 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
         xs, ys = zip(*cont)
         data[f"{i:02}"] = {
             "x coordinate": [float(x) for x in xs],
-            "y coordinate": [float(y) for y in ys]
+            "y coordinate": [float(y) for y in ys],
+            "type": "aggregate"
         }
 
     # bx, by = zip(*boundary)
@@ -996,3 +996,21 @@ def mesh_gen(dataset_json: str, mesh_size: float = 0.1, outfile: str = "output_c
     geo.append("Coherence;")
     geo.append(f"Save \"{outfile}\";")
     pathlib.Path(outfile).write_text("\n".join(geo), encoding="utf-8")
+
+
+def add_boundary(x_max, y_max, data):
+    """
+    Add boundary in final dataset dataset.
+
+    :param x_max: Maximum x coordinate
+    :param y_max: Maximum y coordinate
+    :param data: Dataset to add boundary
+    """
+
+    data[str(len(data))] = {
+        "x coordinate": [0, x_max, x_max, 0],
+        "y coordinate": [0, 0, y_max, y_max],
+        "type": "boundary"
+    }
+
+    return data
