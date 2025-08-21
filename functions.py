@@ -1121,22 +1121,25 @@ def purge_images_everywhere(csv_path: str | None = None, json_path: str | None =
                             delete_list: list[str] | None = None, csv_image_col: str = "image_name", verbose: bool = True
                             ) -> None:
     """
-    Purge entries across a CSV, a JSON, and an image directory.
+    Apply an offset (buffer) to contours stored in a JSON and return updated contours.
+    - Positive `offset` dilates; negative erodes.
+    - Cleans post-buffer geometry (fixes invalid shapes; removes tiny components).
+    - If the buffered result is a MultiPolygon, only the largest piece is kept.
+    - Works with flat or nested JSON; `names_to_offset` limits which records are processed.
+    - When `recompute_rates` is True (and areas are provided), updates area ratios.
+    - If `close_ring` is True, repeats the first vertex at the end.
 
-    - If `json_path` is provided, its keys define the keep set; anything else is removed
-    from the CSV and `image_dir`.
-    - `delete_list` is always removed from all targets (CSV/JSON/directory).
-    - Without `json_path`, only `delete_list` is applied.
-    - Destructive operation: overwrites CSV/JSON and deletes files on disk.
+    :param json_path: Path to the input contours JSON (required).
+    :param names_to_offset: List of names to process; if None, process all (optional).
+    :param offset: Buffer distance in pixels. Default: 2.0.
+    :param join_style: Corner style: "round" | "mitre" | "bevel". Default: "round".
+    :param close_ring: If True, repeat the first vertex at the end. Default: True.
+    :param recompute_rates: Recompute area ratios using `image_area`/`patch_area`. Default: False.
+    :param image_area: Image area in px² (used if `recompute_rates`). Default: 2500*2500.
+    :param patch_area: Patch area in px² (used if `recompute_rates`). Default: 512*512.
+    :param verbose: If True, print how many contours were updated. Default: True.
 
-    :param csv_path: Path to the CSV to filter (optional).
-    :param json_path: Path to the reference JSON (defines keep set) and to prune by `delete_list` (optional).
-    :param image_dir: Directory containing images to delete from (optional).
-    :param delete_list: List of image filenames to force-delete everywhere (optional).
-    :param csv_image_col: CSV column with image names. Default: "image_name".
-    :param verbose: If True, print a short summary of removals. Default: True.
-
-    :return: None.
+    :return: New dict with updated exterior contours (no holes).
     """
 
     def _list_images_in_dir(d: str) -> set[str]:
@@ -1249,3 +1252,218 @@ def purge_images_everywhere(csv_path: str | None = None, json_path: str | None =
     return None
 
 
+def offset_contours(
+    json_path,
+    names_to_offset=None,   # list of names; if None, process all
+    offset=2.0,             # pixels (positive = dilate, negative = erode)
+    join_style="round",     # "round" | "mitre" | "bevel"
+    close_ring=True,        # if True, repeat the first point at the end
+    recompute_rates=False,  # if True, recompute ratios if image_area/patch_area are provided
+    image_area=2500*2500,
+    patch_area=512*512,
+    verbose=True,
+):
+    """
+    Apply an offset (buffer) to contours in a JSON and return a NEW dictionary
+    with updated contours. Includes post-buffer cleanup to eliminate tiny components.
+
+    Parameters
+    ----------
+    json_path : str
+        Path to the input JSON file.
+    names_to_offset : list[str] | None
+        Specific image/record names to process; if None, process all entries.
+    offset : float
+        Buffer distance in pixels. Positive dilates; negative erodes.
+    join_style : str
+        One of {"round", "mitre", "bevel"} (polygon corner style).
+    close_ring : bool
+        If True, ensures the first vertex is repeated as the last vertex.
+    recompute_rates : bool
+        If True, recomputes area ratios using provided image_area and patch_area.
+    image_area : float | None
+        Full image area in pixels^2 (used for recompute_rates).
+    patch_area : float | None
+        Patch area in pixels^2 (used for recompute_rates).
+    verbose : bool
+        If True, prints how many contours were updated.
+
+    Returns
+    -------
+    dict
+        New JSON-like dictionary with updated contours.
+    """
+
+    # Thresholds to discard "specks" after buffering
+    REL_MIN_AREA = 1e-3   # remove parts < 0.1% of the largest component area
+    ABS_MIN_AREA = 4.0    # also remove parts with area < 4 px² (absolute threshold)
+
+    def pick_key(d, candidates):
+        for k in candidates:
+            if k in d:
+                return k
+        return None
+
+    def to_polygon(xs, ys):
+        if not xs or not ys or len(xs) != len(ys):
+            return None
+        poly = Polygon(zip(xs, ys))
+        # Fix self-intersections and invalid geometries
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        if poly.is_empty:
+            return None
+        # If a MultiPolygon appears here, keep only the largest piece
+        if poly.geom_type == "MultiPolygon":
+            poly = max(poly.geoms, key=lambda g: g.area)
+        return poly
+
+    def from_polygon(poly, close=False):
+        if poly is None or poly.is_empty:
+            return [], []
+        coords = list(poly.exterior.coords)
+        # Optionally drop the closing vertex to keep open rings
+        if not close and len(coords) >= 2 and coords[0] == coords[-1]:
+            coords = coords[:-1]
+        xs = [float(x) for x, _ in coords]
+        ys = [float(y) for _, y in coords]
+        return xs, ys
+
+    def clean_after_buffer(geom):
+        """Remove very small pieces and enforce valid topology."""
+        if geom is None or geom.is_empty:
+            return geom
+
+        # Force valid rings / fix self-intersections
+        geom = geom.buffer(0)
+        if geom.is_empty:
+            return geom
+
+        # Keep only Polygons if a GeometryCollection appears (drop Points/LineStrings)
+        if geom.geom_type == "GeometryCollection":
+            polys = [g for g in geom.geoms if g.geom_type == "Polygon" and not g.is_empty]
+            if not polys:
+                return None
+            geom = unary_union(polys)
+
+        # If MultiPolygon, drop tiny parts relative to the largest one and absolute threshold
+        if geom.geom_type == "MultiPolygon":
+            parts = [p for p in geom.geoms if not p.is_empty]
+            if not parts:
+                return None
+            parts.sort(key=lambda g: g.area, reverse=True)
+            main = parts[0]
+            thr = max(REL_MIN_AREA * main.area, ABS_MIN_AREA)
+            keep = [p for p in parts if p.area >= thr]
+            geom = unary_union(keep) if len(keep) > 1 else keep[0]
+
+        # If still a MultiPolygon later, we keep only the largest piece downstream
+        return geom
+
+    def do_buffer(poly):
+        js_map = {"round": JOIN_STYLE.round, "mitre": JOIN_STYLE.mitre, "bevel": JOIN_STYLE.bevel}
+        js = js_map.get(join_style.lower(), JOIN_STYLE.round)
+        # Slightly higher resolution for smoother arcs
+        out = poly.buffer(offset, resolution=24, join_style=js)
+        out = clean_after_buffer(out)
+        if out is None or out.is_empty:
+            return None
+        if out.geom_type == "MultiPolygon":
+            out = max(out.geoms, key=lambda g: g.area)
+        return out
+
+    def process_record(rec):
+        xk = pick_key(rec, ["x coordinate in 0,0", "x coordinate", "x"])
+        yk = pick_key(rec, ["y coordinate in 0,0", "y coordinate", "y"])
+        if xk is None or yk is None:
+            return rec
+
+        xs, ys = rec.get(xk, []), rec.get(yk, [])
+        poly = to_polygon(xs, ys)
+        if poly is None:
+            return rec
+
+        buff = do_buffer(poly)
+        if buff is None:
+            return rec
+
+        xs2, ys2 = from_polygon(buff, close=close_ring)
+        # If for any reason the buffered polygon collapses to fewer than 3 points, keep the original
+        if len(xs2) < 3 or len(ys2) < 3:
+            return rec
+
+        new_rec = dict(rec)
+        new_rec[xk] = xs2
+        new_rec[yk] = ys2
+        new_rec["contour area (px)"] = float(buff.area)
+
+        if recompute_rates:
+            if image_area and image_area > 0:
+                new_rec["rate of contour area to image area"] = float(buff.area / image_area)
+            if patch_area and patch_area > 0:
+                new_rec["rate of contour area to patch area"] = float(buff.area / patch_area)
+
+        return new_rec
+
+    # Load JSON
+    with open(json_path, "r") as f:
+        data = json.load(f) or {}
+
+    names_set = set(map(str, names_to_offset)) if names_to_offset else None
+
+    def is_record(d):
+        return pick_key(d, ["x coordinate in 0,0", "x coordinate", "x"]) is not None and \
+               pick_key(d, ["y coordinate in 0,0", "y coordinate", "y"]) is not None
+
+    # Detect whether the JSON is nested (e.g., {img_name: {idx: record_dict, ...}, ...})
+    looks_nested = any(
+        isinstance(v, dict) and any(isinstance(sv, dict) and is_record(sv) for sv in v.values())
+        for v in data.values() if isinstance(v, dict)
+    )
+
+    out = {}
+
+    # Process records
+    if looks_nested:
+        for img_name, subdict in data.items():
+            if not isinstance(subdict, dict):
+                out[img_name] = subdict
+                continue
+            out[img_name] = {}
+            for idx, rec in subdict.items():
+                full_key = f"{img_name}_{idx}.png"
+                if (names_set is None) or (full_key in names_set) or (img_name in names_set):
+                    out[img_name][idx] = process_record(rec if isinstance(rec, dict) else {})
+                else:
+                    out[img_name][idx] = rec
+    else:
+        for name, rec in data.items():
+            if (names_set is None) or (name in names_set):
+                out[name] = process_record(rec if isinstance(rec, dict) else {})
+            else:
+                out[name] = rec
+
+    if verbose:
+        changed = 0
+        if looks_nested:
+            for img_name, subdict in data.items():
+                if not isinstance(subdict, dict):
+                    continue
+                for idx, rec_old in subdict.items():
+                    rec_new = out.get(img_name, {}).get(idx, None)
+                    if isinstance(rec_old, dict) and isinstance(rec_new, dict):
+                        xk = pick_key(rec_old, ["x coordinate in 0,0", "x coordinate", "x"])
+                        yk = pick_key(rec_old, ["y coordinate in 0,0", "y coordinate", "y"])
+                        if xk and yk and (rec_old.get(xk) != rec_new.get(xk) or rec_old.get(yk) != rec_new.get(yk)):
+                            changed += 1
+        else:
+            for k, rec_old in data.items():
+                rec_new = out.get(k, None)
+                if isinstance(rec_old, dict) and isinstance(rec_new, dict):
+                    xk = pick_key(rec_old, ["x coordinate in 0,0", "x coordinate", "x"])
+                    yk = pick_key(rec_old, ["y coordinate in 0,0", "y coordinate", "y"])
+                    if xk and yk and (rec_old.get(xk) != rec_new.get(xk) or rec_old.get(yk) != rec_new.get(yk)):
+                        changed += 1
+        print(f"offset_contours: contours updated = {changed}")
+
+    return out
