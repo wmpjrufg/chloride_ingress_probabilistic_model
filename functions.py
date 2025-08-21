@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import scipy as sc
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, JOIN_STYLE
 from shapely.ops import unary_union
 import gdown
 
@@ -910,19 +910,91 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
     return data
 
 
-def clean_contour_into_other_contour(contours_dict: dict) -> dict:
-    """
-    Remove contornos internos (buracos) e retorna apenas polígonos sólidos.
-    Usa unary_union para consolidar os contornos.
-    """
-    # --- Constrói lista de polígonos ---
-    polygons = [Polygon(list(zip(v["x coordinate"], v["y coordinate"])))
-                for v in contours_dict.values()]
+# def clean_contour_into_other_contour(contours_dict: dict) -> dict:
+#     """
+#     Remove contornos internos (buracos) e retorna apenas polígonos sólidos.
+#     Usa unary_union para consolidar os contornos.
+#     """
+#     # --- Constrói lista de polígonos ---
+#     polygons = [Polygon(list(zip(v["x coordinate"], v["y coordinate"])))
+#                 for v in contours_dict.values()]
 
-    # --- Une todos os polígonos ---
-    unioned = unary_union(polygons)
+#     # --- Une todos os polígonos ---
+#     unioned = unary_union(polygons)
 
-    # Garante lista de polígonos
+#     # Garante lista de polígonos
+#     if unioned.geom_type == "Polygon":
+#         polys = [unioned]
+#     elif unioned.geom_type == "MultiPolygon":
+#         polys = list(unioned.geoms)
+#     else:
+#         polys = []
+
+#     # --- Reconstrói apenas contornos externos ---
+#     final_contours = {}
+#     contour_id = 1
+#     for poly in polys:
+#         xs, ys = poly.exterior.xy
+#         final_contours[f"{contour_id:02}"] = {
+#             "x coordinate": list(xs),
+#             "y coordinate": list(ys)
+#         }
+#         contour_id += 1
+
+#     return final_contours
+
+
+def clean_contour_into_other_contour(contours_dict: dict, min_area: float = 0.0, ensure_single: bool = False) -> dict:
+    """
+    Clean contour polygons by fixing invalid shapes, removing holes, and unifying overlaps.
+
+    :param contours_dict: Mapping {id: {"x coordinate": [...], "y coordinate": [...]}}.
+    :param min_area: Minimum area to keep before union. Default: 0.0.
+    :param ensure_single: If True, keep only the largest polygon after union. Default: False.
+
+    :return: Dict with only exterior contours (same schema; keys like "01", "02", ...). Returns {} if none.
+    """
+    valid_polys = []
+
+    # Build and filter input polygons
+    for v in contours_dict.values():
+        xs = v.get("x coordinate", [])
+        ys = v.get("y coordinate", [])
+        if not xs or not ys or len(xs) != len(ys):
+            continue
+
+        poly = Polygon(zip(xs, ys))
+
+        # Fix self-intersections and invalid geometries
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+
+        # Discard contours that "turn into" a MultiPolygon (more than one piece)
+        if poly.geom_type == "MultiPolygon":
+            continue
+
+        if poly.geom_type != "Polygon":
+            continue
+
+        if min_area and poly.area < min_area:
+            continue
+
+        valid_polys.append(poly)
+
+    if not valid_polys:
+        return {}
+
+    # Union of valid polygons
+    unioned = unary_union(valid_polys)
+
+    # Optionally ensure a single polygon (keep the largest)
+    if ensure_single:
+        if unioned.geom_type == "MultiPolygon":
+            unioned = max(unioned.geoms, key=lambda g: g.area)
+        elif unioned.geom_type != "Polygon":
+            return {}
+
+    # Normalize to a list of polygons
     if unioned.geom_type == "Polygon":
         polys = [unioned]
     elif unioned.geom_type == "MultiPolygon":
@@ -930,46 +1002,250 @@ def clean_contour_into_other_contour(contours_dict: dict) -> dict:
     else:
         polys = []
 
-    # --- Reconstrói apenas contornos externos ---
+    # Reconstruct only exterior contours (no holes)
     final_contours = {}
-    contour_id = 1
-    for poly in polys:
+    for idx, poly in enumerate(polys, start=1):
         xs, ys = poly.exterior.xy
-        final_contours[f"{contour_id:02}"] = {
+        final_contours[f"{idx:02}"] = {
             "x coordinate": list(xs),
-            "y coordinate": list(ys)
+            "y coordinate": list(ys),
         }
-        contour_id += 1
 
     return final_contours
 
 
 def check_overlapping_contours(contours_dict: dict) -> int:
     """
-    Verifica se existem contornos sobrepostos.
-    Retorna e imprime o número de pares de contornos que se sobrepõem.
+    Check for overlapping contour polygons.
+
+    Builds Shapely polygons from the given coordinates, counts unique pairs that
+    overlap with positive area (intersect but do not merely touch), prints each
+    overlapping pair, and returns the total.
+
+    :param contours_dict: Mapping {id: {"x coordinate": [...], "y coordinate": [...]}}.
+    :return: Total number of overlapping contour pairs (int).
     """
+    # Build list of (key, polygon) for all contours
     keys = list(contours_dict.keys())
-    polygons = [(k, Polygon(list(zip(contours_dict[k]["x coordinate"],
-                                     contours_dict[k]["y coordinate"])))) 
-                                     for k in keys]
+    polygons = [
+        (
+            k,
+            Polygon(
+                list(
+                    zip(
+                        contours_dict[k]["x coordinate"],
+                        contours_dict[k]["y coordinate"]
+                    )
+                )
+            ),
+        )
+        for k in keys
+    ]
 
     overlap_count = 0
-    checked_pairs = set()
 
+    # Compare each pair only once (i < j)
     for i in range(len(polygons)):
         k1, poly1 = polygons[i]
-        for j in range(i+1, len(polygons)):
+        for j in range(i + 1, len(polygons)):
             k2, poly2 = polygons[j]
 
-            # Evita comparar o mesmo par duas vezes
-            if (k1, k2) in checked_pairs or (k2, k1) in checked_pairs:
-                continue
-
+            # Count only true area overlaps: intersects but not just touches
             if poly1.intersects(poly2) and not poly1.touches(poly2):
                 overlap_count += 1
-                print(f"⚠️ Contornos {k1} e {k2} estão sobrepostos.")
-            checked_pairs.add((k1, k2))
+                print(f"Contours {k1} and {k2} are overlapping.")
 
-    print(f"\n🔎 Total de pares de contornos sobrepostos: {overlap_count}")
+    print(f"\nTotal overlapping contour pairs: {overlap_count}")
     return overlap_count
+
+def find_multipolygon_contours(json_file: str) -> list:
+    """
+    Find contour entries in a JSON that become MultiPolygons.
+
+    Loads the contours JSON, detects IDs whose geometry is a MultiPolygon,
+    prints those IDs, and returns them.
+
+    :param json_file: Path to the contours JSON file.
+    :return: List of image/contour IDs that contain MultiPolygons.
+    """
+    with open(json_file, 'r') as f:
+        data = json.load(f)
+
+    # possible key names for robustness
+    x_candidates = [
+        "x coordinate in 0,0",
+        "x coordinate",
+        "x",
+    ]
+    y_candidates = [
+        "y coordinate in 0,0",
+        "y coordinate",
+        "y",
+    ]
+
+    def pick_key(d: dict, candidates: list):
+        for k in candidates:
+            if k in d:
+                return k
+        return None
+
+    multipoly_images = []
+
+    for image_name, rec in data.items():
+        if not isinstance(rec, dict):
+            continue
+
+        xk = pick_key(rec, x_candidates)
+        yk = pick_key(rec, y_candidates)
+        if xk is None or yk is None:
+            # skip if expected keys are missing
+            continue
+
+        xs = rec.get(xk, [])
+        ys = rec.get(yk, [])
+        if not xs or not ys or len(xs) != len(ys):
+            continue
+
+        poly = Polygon(zip(xs, ys))
+        if not poly.is_valid:
+            poly = poly.buffer(0)  # fix self-intersections
+
+        if poly.geom_type == "MultiPolygon":
+            multipoly_images.append(image_name)
+            print(f"[MultiPolygon] {image_name}")
+
+    return multipoly_images
+
+
+def purge_images_everywhere(csv_path: str | None = None, json_path: str | None = None, image_dir: str | None = None, 
+                            delete_list: list[str] | None = None, csv_image_col: str = "image_name", verbose: bool = True
+                            ) -> None:
+    """
+    Purge entries across a CSV, a JSON, and an image directory.
+
+    - If `json_path` is provided, its keys define the keep set; anything else is removed
+    from the CSV and `image_dir`.
+    - `delete_list` is always removed from all targets (CSV/JSON/directory).
+    - Without `json_path`, only `delete_list` is applied.
+    - Destructive operation: overwrites CSV/JSON and deletes files on disk.
+
+    :param csv_path: Path to the CSV to filter (optional).
+    :param json_path: Path to the reference JSON (defines keep set) and to prune by `delete_list` (optional).
+    :param image_dir: Directory containing images to delete from (optional).
+    :param delete_list: List of image filenames to force-delete everywhere (optional).
+    :param csv_image_col: CSV column with image names. Default: "image_name".
+    :param verbose: If True, print a short summary of removals. Default: True.
+
+    :return: None.
+    """
+
+    def _list_images_in_dir(d: str) -> set[str]:
+        """Return the set of image filenames (with extensions) present in directory `d`."""
+        if not d or not os.path.isdir(d):
+            return set()
+        exts = {".png", ".jpg", ".jpeg"}
+        return {f for f in os.listdir(d) if os.path.splitext(f.lower())[1] in exts}
+
+    def _infer_image_col(df: pd.DataFrame) -> str:
+        """
+        Infer the column name in `df` that contains image names.
+        Falls back through common alternatives if `csv_image_col` is not present.
+        """
+        if csv_image_col in df.columns:
+            return csv_image_col
+        for c in ["image_name", "image", "img", "filename", "file", "patch_name", "name"]:
+            if c in df.columns:
+                return c
+        raise ValueError(
+            "Could not find a column that looks like image names. "
+            f"Specify `csv_image_col`. Columns found: {list(df.columns)}"
+        )
+
+
+    # Gather inputs
+    explicit_delete = set(map(str, delete_list or []))
+
+    keep_set: set[str] = set()
+    data_json: dict = {}
+    if json_path is not None:
+        if not os.path.isfile(json_path):
+            raise FileNotFoundError(f"json_path not found: {json_path}")
+        with open(json_path, "r") as f:
+            data_json = json.load(f) or {}
+        if not isinstance(data_json, dict):
+            raise ValueError("json_path must contain a dict like { 'name.png': {...}, ... }")
+        keep_set = set(map(str, data_json.keys()))
+
+    # Observe universe
+    csv_names: set[str] = set()
+    dir_names: set[str] = set()
+
+    if csv_path is not None and os.path.isfile(csv_path):
+        df = pd.read_csv(csv_path)
+        col = _infer_image_col(df)
+        csv_names = set(df[col].astype(str).tolist())
+
+    if image_dir is not None and os.path.isdir(image_dir):
+        dir_names = _list_images_in_dir(image_dir)
+
+    if not any([csv_path, json_path, image_dir]):
+        if verbose:
+            print("Nothing to do: none of csv_path/json_path/image_dir were provided.")
+        return {"csv_rows_removed": 0, "json_entries_removed": 0, "files_removed": 0}
+
+    # Decide what to remove
+    if keep_set:
+        # JSON defines what stays; also always remove explicit_delete everywhere
+        purge_csv = (csv_names - keep_set) | (csv_names & explicit_delete)
+        purge_dir = (dir_names - keep_set) | (dir_names & explicit_delete)
+        purge_json = explicit_delete
+    else:
+        # No JSON: only remove what's in delete_list
+        purge_csv = csv_names & explicit_delete
+        purge_dir = dir_names & explicit_delete
+        purge_json = explicit_delete
+
+    # CSV (overwrite)
+    csv_rows_removed = 0
+    if csv_path is not None and os.path.isfile(csv_path) and csv_names:
+        df = pd.read_csv(csv_path)
+        col = _infer_image_col(df)
+        if keep_set:
+            # Keep rows whose image is in keep_set, except those explicitly deleted
+            keep_rows = df[col].astype(str).isin(keep_set - purge_json)
+        else:
+            # Without a reference JSON, only delete explicit_delete
+            keep_rows = ~df[col].astype(str).isin(purge_csv)
+        csv_rows_removed = int((~keep_rows).sum())
+        df[keep_rows].to_csv(csv_path, index=False)
+
+    # JSON (remove only delete_list)
+    json_entries_removed = 0
+    if json_path is not None and data_json and purge_json:
+        new_json = {k: v for k, v in data_json.items() if k not in purge_json}
+        json_entries_removed = len(data_json) - len(new_json)
+        with open(json_path, "w") as f:
+            json.dump(new_json, f, indent=4)
+
+    # Directory (delete files)
+    files_removed = 0
+    if image_dir is not None and os.path.isdir(image_dir) and dir_names:
+        for name in sorted(purge_dir):
+            fp = os.path.join(image_dir, name)
+            try:
+                os.remove(fp)
+                files_removed += 1
+            except FileNotFoundError:
+                # If the file disappeared between listing and deletion, ignore it
+                pass
+
+    print("Purge finished!!!")
+
+    if verbose:
+        print(f" - CSV rows removed: {csv_rows_removed}")
+        print(f" - JSON entries removed: {json_entries_removed}")
+        print(f" - Files removed from directory: {files_removed}")
+
+    return None
+
+
