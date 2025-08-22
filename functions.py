@@ -7,6 +7,7 @@ from typing import Sequence
 import zipfile
 import time as ti
 import pathlib
+import math
 
 import cv2
 import shapely as sh
@@ -822,7 +823,7 @@ def generate_cross_section(x_list: list, y_list: list, n_s: int = 300, dataset_c
             contours_filtered = [c for i, c in enumerate(contours) if i in ids]
             collide = any(cand_poly.intersects(sh.geometry.Polygon(c)) for c in contours_filtered)
             tries = 0
-            while collide and tries < 20:
+            while collide and tries < 50:
                 centroids = sc.stats.qmc.scale(sampler.random(n=1), [x_list[0], y_list[0]], [x_list[2], y_list[2]]).squeeze()
                 cx = noise_point([centroids[0]], value_noise=float(np.random.uniform(1, 2)))[0]
                 cy = noise_point([centroids[1]], value_noise=float(np.random.uniform(1, 2)))[0]
@@ -1014,3 +1015,202 @@ def add_boundary(x_max, y_max, data):
     }
 
     return data
+
+
+def clean_dataset_to_mesh(dataset_json: str):
+    """
+    Clean dataset and remove duplicate points in the end of the list and use undersampling to generated a contours.
+
+    :param dataset_json: Path to the dataset JSON file.    
+    """
+
+    def same_point(x1, y1, x2, y2, tol=1e-9):
+        return math.isclose(x1, x2, rel_tol=0, abs_tol=tol) and math.isclose(y1, y2, rel_tol=0, abs_tol=tol)
+    
+    def undersample_random(contour, n_points):
+        indices = np.random.choice(len(contour), n_points, replace=False)
+        id = np.sort(indices)
+        contour_new = []
+        for i in id:
+            contour_new.append(contour[i])
+        return contour_new
+    
+    with open(dataset_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    
+    for _, fig in data.items():
+        x = fig.get("x coordinate", [])
+        y = fig.get("y coordinate", [])
+        if len(x) >= 2 and len(y) >= 2 and len(x) == len(y):
+            if same_point(x[0], y[0], x[-1], y[-1], tol=1e-9):
+                x.pop()
+                y.pop()
+
+    for key, fig in data.items():
+        x = fig.get("x coordinate", [])
+        y = fig.get("y coordinate", [])
+        if len(x) > 50 and len(x) <= 100 and fig.get("type","").lower().strip() == "aggregate":
+            x_final = undersample_random(x, 50)
+            y_final = undersample_random(y, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 100 and len(x) <= 200 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 100)
+            y_new = undersample_random(y, 100)
+            x_final = undersample_random(x_new, 50)
+            y_final = undersample_random(y_new, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 200 and len(x) <= 300 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 200)
+            y_new = undersample_random(y, 200)
+            x_newnew = undersample_random(x_new, 100)
+            y_newnew = undersample_random(y_new, 100)
+            x_final = undersample_random(x_newnew, 50)
+            y_final = undersample_random(y_newnew, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 300 and len(x) <= 400 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 300)
+            y_new = undersample_random(y, 300)
+            x_newnew = undersample_random(x_new, 200)
+            y_newnew = undersample_random(y_new, 200)
+            x_newnewnew = undersample_random(x_newnew, 100)
+            y_newnewnew = undersample_random(y_newnew, 100)
+            x_final = undersample_random(x_newnewnew, 50)
+            y_final = undersample_random(y_newnewnew, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 400 and len(x) <= 500 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 400)
+            y_new = undersample_random(y, 400)
+            x_newnew = undersample_random(x_new, 300)
+            y_newnew = undersample_random(y_new, 300)
+            x_newnewnew = undersample_random(x_newnew, 200)
+            y_newnewnew = undersample_random(y_newnew, 200)
+            x_newnewnewnew = undersample_random(x_newnewnew, 100)
+            y_newnewnewnew = undersample_random(y_newnewnew, 100)
+            x_final = undersample_random(x_newnewnewnew, 50)
+            y_final = undersample_random(y_newnewnewnew, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 500 and len(x) <= 600 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 450)
+            y_new = undersample_random(y, 450)
+            x_newnew = undersample_random(x_new, 350)
+            y_newnew = undersample_random(y_new, 350)
+            x_newnewnew = undersample_random(x_newnew, 200)
+            y_newnewnew = undersample_random(y_newnew, 200)
+            x_newnewnewnew = undersample_random(x_newnewnew, 100)
+            y_newnewnewnew = undersample_random(y_newnewnew, 100)
+            x_final = undersample_random(x_newnewnewnew, 50)
+            y_final = undersample_random(y_newnewnewnew, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+        elif len(x) > 600 and fig.get("type","").lower().strip() == "aggregate":
+            x_new = undersample_random(x, 550)
+            y_new = undersample_random(y, 500)
+            x_newnew = undersample_random(x_new, 450)
+            y_newnew = undersample_random(y_new, 450)
+            x_newnewnew = undersample_random(x_newnew, 300)
+            y_newnewnew = undersample_random(y_newnew, 300)
+            x_newnewnewnew = undersample_random(x_newnewnew, 150)
+            y_newnewnewnew = undersample_random(y_newnewnew, 150)
+            x_final = undersample_random(x_newnewnewnew, 50)
+            y_final = undersample_random(y_newnewnewnew, 50)
+            data[key]["x coordinate"] = x_final
+            data[key]["y coordinate"] = y_final
+
+        else:
+            pass
+
+        
+
+    with open("dataset_cleaned.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def find_multipolygon_contours(json_file: str) -> list:
+    """
+    Scans the JSON of contours and returns those that turned into MultiPolygon. Also prints the found IDs on the screen.
+    
+    :param json_file: path to the .json file
+    :return: list of image names that contain MultiPolygons
+    """
+
+    with open(json_file, 'r') as f:
+        data = json.load(f)
+
+    x_candidates = [
+        "x coordinate in 0,0",
+        "x coordinate",
+        "x",
+    ]
+    y_candidates = [
+        "y coordinate in 0,0",
+        "y coordinate",
+        "y",
+    ]
+
+    def pick_key(d: dict, candidates: list):
+        for k in candidates:
+            if k in d:
+                return k
+        return None
+
+    multipoly_images = []
+
+    for image_name, rec in data.items():
+        if not isinstance(rec, dict):
+            continue
+
+        xk = pick_key(rec, x_candidates)
+        yk = pick_key(rec, y_candidates)
+        if xk is None or yk is None:
+            # pula se não houver chaves esperadas
+            continue
+
+        xs = rec.get(xk, [])
+        ys = rec.get(yk, [])
+        if not xs or not ys or len(xs) != len(ys):
+            continue
+
+        poly = sh.geometry.Polygon(zip(xs, ys))
+        if not poly.is_valid:
+            poly = poly.buffer(0)  # corrige auto-interseções
+
+        if poly.geom_type == "MultiPolygon":
+            multipoly_images.append(image_name)
+            print(f"[MultiPolygon] {image_name}")
+
+    return multipoly_images
+
+    
+def increase_sampling_in_boundary(x_ini: list, y_ini: list, n_samples_per_side: int):
+    """
+    Increase sampling along the rectangular contour
+
+    :param x_ini: x coordinates of the vertices [x1, x2, x3, x4]
+    :param y_ini: y coordinates of the vertices [y1, y2, y3, y4]
+    :param n_samples_per_side: number of samples for each side of the rectangle
+
+    :return: x_novo, y_novo: arrays with the new coordinates
+    """
+    
+    # Garante que são arrays numpy
+    x_ini = np.array(x_ini)
+    y_ini = np.array(y_ini)
+
+    x_novo = []
+    y_novo = []
+
+    for i in range(4):
+        x0, y0 = x_ini[i], y_ini[i]
+        x1, y1 = x_ini[(i + 1) % 4], y_ini[(i + 1) % 4]
+        x_interp = np.linspace(x0, x1, n_samples_per_side, endpoint=False)
+        y_interp = np.linspace(y0, y1, n_samples_per_side, endpoint=False)
+        x_novo.extend(x_interp)
+        y_novo.extend(y_interp)
+
+    return list(np.array(x_novo)), list(np.array(y_novo))
