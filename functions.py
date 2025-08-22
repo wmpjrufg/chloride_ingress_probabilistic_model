@@ -491,7 +491,7 @@ def sort_contours_using_uniform_pdf_and_group(csv_path: str, json_path: str, n_o
     df_full = pd.merge(df_json, df_csv, on='image_name')
     df_full = df_full[['image_name', 'x coordinate in 0,0', 'y coordinate in 0,0', 'diameter (px)', 'diameter (mm)', 'area (px)', 'area (mm2)']]
 
-    df_selected_contours = df_full.sample(n=n_objects)
+    #df_selected_contours = df_full.sample(n=n_objects)
     df_sorted = df_selected_contours.sort_values('diameter (px)', ascending=False).reset_index(drop=True)
     group_dim = np.array_split(df_sorted.index, n_groups)
     df_sorted['group by diameter (px)'] = -1
