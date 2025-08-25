@@ -1216,115 +1216,80 @@ def increase_sampling_in_boundary(x_ini: list, y_ini: list, n_samples_per_side: 
     return list(np.array(x_novo)), list(np.array(y_novo))
 
 
-def purge_images_everywhere(csv_path: str , json_path: str, image_dir: str , delete_list: list, csv_image_col: str, verbose: bool = True) -> None:
+def purge_images_everywhere(csv_path: str, json_path: str, image_dir: str, delete_list: list, csv_image_col: str="image_name", verbose: bool = True) -> None:
+    """
+     Filtered dataset based on a reference JSON, and create new files: 
+        - <csv_path>_purge.csv with filtered rows,
+        - <json_path>_purge.json with filtered entries,
+        - <image_dir>_purge folder with filtered images.
+
+    :param csv_path: Path to the CSV file containing image names.
+    :param json_path: Path to the reference JSON (defines keep set).
+    :param image_dir: Path to the directory containing the images.
+    :param delete_list: List of image filenames to force-remove everywhere.
+    :param csv_image_col: Name of the CSV column containing image names.
+    :param verbose: If True, print a short summary of the operation. Default: True.
+
+    :return: None. 
     """
 
-    """
+    # Convert the list to a set of strings for efficient set operations
+    purge_json = set(map(str, delete_list or []))
 
-    def _list_images_in_dir(d: str) -> set[str]:
-        """Return the set of image filenames (with extensions) present in directory `d`."""
-        if not d or not os.path.isdir(d):
-            return set()
-        exts = {".png", ".jpg", ".jpeg"}
-        return {f for f in os.listdir(d) if os.path.splitext(f.lower())[1] in exts}
+    # Load the reference JSON and build the keep set (image names to keep)
+    with open(json_path, "r") as f:
+        data_json = json.load(f) or {}
+    keep_set = set(map(str, data_json.keys()))
 
-    def _infer_image_col(df: pd.DataFrame) -> str:
-        """
-        Infer the column name in `df` that contains image names.
-        Falls back through common alternatives if `csv_image_col` is not present.
-        """
-        if csv_image_col in df.columns:
-            return csv_image_col
-        for c in ["image_name", "image", "img", "filename", "file", "patch_name", "name"]:
-            if c in df.columns:
-                return c
-        raise ValueError(
-            "Could not find a column that looks like image names. "
-            f"Specify `csv_image_col`. Columns found: {list(df.columns)}"
-        )
+    # Load the CSV and identify the column that contains image names
+    df = pd.read_csv(csv_path)
+    col = csv_image_col if csv_image_col in df.columns else df.columns[0]
 
-    # Gather inputs
-    explicit_delete = set(map(str, delete_list or []))
+    # List valid image files in the directory
+    exts = {".png", ".jpg", ".jpeg"}
+    dir_names = {f for f in os.listdir(image_dir) if os.path.splitext(f.lower())[1] in exts}
 
-    keep_set: set[str] = set()
-    data_json: dict = {}
-    if json_path is not None:
-        if not os.path.isfile(json_path):
-            raise FileNotFoundError(f"json_path not found: {json_path}")
-        with open(json_path, "r") as f:
-            data_json = json.load(f) or {}
-        if not isinstance(data_json, dict):
-            raise ValueError("json_path must contain a dict like { 'name.png': {...}, ... }")
-        keep_set = set(map(str, data_json.keys()))
+    # Output paths
+    csv_out = os.path.splitext(csv_path)[0] + "_purge.csv"
+    json_out = os.path.splitext(json_path)[0] + "_purge.json"
+    dir_out = f"{image_dir}_purge"
 
-    # Observe universe
-    csv_names: set[str] = set()
-    dir_names: set[str] = set()
+    # New CSV: keep only images present in JSON and not in delete_list
+    keep_rows_mask = df[col].astype(str).isin(keep_set - purge_json)
+    df[keep_rows_mask].to_csv(csv_out, index=False)
+    csv_rows_removed = int((~keep_rows_mask).sum())
 
-    if csv_path is not None and os.path.isfile(csv_path):
-        df = pd.read_csv(csv_path)
-        col = _infer_image_col(df)
-        csv_names = set(df[col].astype(str).tolist())
+    # New JSON: remove only entries listed in delete_list
+    new_json = {k: v for k, v in data_json.items() if k not in purge_json}
+    with open(json_out, "w") as f:
+        json.dump(new_json, f, indent=4)
+    json_entries_removed = len(data_json) - len(new_json)
 
-    if image_dir is not None and os.path.isdir(image_dir):
-        dir_names = _list_images_in_dir(image_dir)
+    # New folder: copy only valid images (present in JSON and not in delete_list)
+    os.makedirs(dir_out, exist_ok=True)
+    keep_dir = (dir_names & keep_set) - purge_json
+    files_copied = 0
+    for name in sorted(keep_dir):
+        src = os.path.join(image_dir, name)
+        dst = os.path.join(dir_out, name)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+            files_copied += 1
 
-    if not any([csv_path, json_path, image_dir]):
-        if verbose:
-            print("Nothing to do: none of csv_path/json_path/image_dir were provided.")
-        return {"csv_rows_removed": 0, "json_entries_removed": 0, "files_removed": 0}
+    # Warn about items in delete_list not found in JSON, CSV, or directory
+    all_sources = keep_set | set(df[col].astype(str)) | dir_names
+    not_found = sorted(purge_json - all_sources)
+    if verbose and not_found:
+        print(f"Warning: {len(not_found)} item(s) from delete_list not found in JSON/CSV/dir: {not_found[:10]}")
+        if len(not_found) > 10:
+            print(" ... (truncated)")
 
-    # Decide what to remove
-    if keep_set:
-        # JSON defines what stays; also always remove explicit_delete everywhere
-        purge_csv = (csv_names - keep_set) | (csv_names & explicit_delete)
-        purge_dir = (dir_names - keep_set) | (dir_names & explicit_delete)
-        purge_json = explicit_delete
-    else:
-        # No JSON: only remove what's in delete_list
-        purge_csv = csv_names & explicit_delete
-        purge_dir = dir_names & explicit_delete
-        purge_json = explicit_delete
-
-    # CSV (overwrite)
-    csv_rows_removed = 0
-    if csv_path is not None and os.path.isfile(csv_path) and csv_names:
-        df = pd.read_csv(csv_path)
-        col = _infer_image_col(df)
-        if keep_set:
-            # Keep rows whose image is in keep_set, except those explicitly deleted
-            keep_rows = df[col].astype(str).isin(keep_set - purge_json)
-        else:
-            # Without a reference JSON, only delete explicit_delete
-            keep_rows = ~df[col].astype(str).isin(purge_csv)
-        csv_rows_removed = int((~keep_rows).sum())
-        df[keep_rows].to_csv(csv_path, index=False)
-
-    # JSON (remove only delete_list)
-    json_entries_removed = 0
-    if json_path is not None and data_json and purge_json:
-        new_json = {k: v for k, v in data_json.items() if k not in purge_json}
-        json_entries_removed = len(data_json) - len(new_json)
-        with open(json_path, "w") as f:
-            json.dump(new_json, f, indent=4)
-
-    # Directory (delete files)
-    files_removed = 0
-    if image_dir is not None and os.path.isdir(image_dir) and dir_names:
-        for name in sorted(purge_dir):
-            fp = os.path.join(image_dir, name)
-            try:
-                os.remove(fp)
-                files_removed += 1
-            except FileNotFoundError:
-                # If the file disappeared between listing and deletion, ignore it
-                pass
-
-    print("Purge finished!!!")
-
+    # Print a summary
     if verbose:
-        print(f" - CSV rows removed: {csv_rows_removed}")
-        print(f" - JSON entries removed: {json_entries_removed}")
-        print(f" - Files removed from directory: {files_removed}")
-
-    return None
+        print("Purge completed!")
+        print(f" - CSV rows removed (source): {csv_rows_removed}")
+        print(f" - JSON entries removed (source): {json_entries_removed}")
+        print(f" - Images copied to the new folder: {files_copied}")
+        print(f" - CSV written to:  {csv_out}")
+        print(f" - JSON written to: {json_out}")
+        print(f" - Folder created:  {dir_out}")
