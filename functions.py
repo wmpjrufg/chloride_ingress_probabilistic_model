@@ -714,6 +714,16 @@ def data_augmentation(csv_path: str, json_path: str, name_output: str, n_new_ima
 #         plt.show()
 
 
+def build_csv_from_folder(filepath: str, csv_path: str, name_output: str):
+    files = [os.path.join(filepath, f) for f in os.listdir(filepath)]
+    files = [os.path.basename(pathh) for pathh in files]
+    print(files)
+    df = pd.read_csv(csv_path)
+    df_filtered_final = df[df["image name"].str.startswith(tuple(files))]
+    name_output_csv = f'dataset/{name_output}.csv'
+    df_filtered_final.to_csv(name_output_csv, index=False)
+
+
 def filter_images_by_diameter(csv_path: str, json_path: str, name_output: str, threshold_diam_mm: tuple) -> None:
     """
     Read a set of images and delete all the images whose diameter is greater than to the specified threshold.
@@ -741,6 +751,38 @@ def filter_images_by_diameter(csv_path: str, json_path: str, name_output: str, t
     #     dst_path = os.path.join(output_dir, image_name)
     #     if os.path.exists(src_path):
     #         shutil.copy(src_path, dst_path)
+
+    # Save filtered CSV
+    name_output_csv = f'dataset/{name_output}.csv'
+    df_filtered_final.to_csv(name_output_csv, index=False)
+
+    # Load full contours JSON
+    with open(json_path, "r") as f:
+        contours_data = json.load(f)
+
+    # Save filtered JSON
+    name_output_json = f'dataset/{name_output}.json'
+    new_json = {key: contours_data[key] for key in filtered_image_names}
+    with open(name_output_json, "w", encoding="utf-8") as f:
+        json.dump(new_json, f, indent=4, ensure_ascii=False)
+
+
+def filter_images_by_names(csv_path: str, json_path: str, name_output: str, threshold_names: tuple) -> None:
+    """
+    Read a set of images and delete all the images
+
+    :param csv_path: Path to the CSV file with columns
+    :param image_dir: Directory where the original images are located
+    :param output_dir: Destination directory for filtered images
+    :param threshold_diam_mm: Diameter threshold for filtering (default: 15.0 mm)
+    """
+
+    # Load CSV
+    df = pd.read_csv(csv_path)
+
+    # Filter by diameter
+    df_filtered_final = df[df["image name"].str.startswith(tuple(threshold_names))]
+    filtered_image_names = df_filtered_final['image name'].tolist()
 
     # Save filtered CSV
     name_output_csv = f'dataset/{name_output}.csv'
